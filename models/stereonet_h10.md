@@ -23,3 +23,13 @@ matching moves off the CPU onto the Hailo, freeing the CPU and raising the depth
 - **Caveats:** trained on driving/KITTI scenes at the wide 368×1232 aspect, so indoor accuracy is
   rough and our square-ish tiles are resized (vertically squished) into it; the horizontal disparity
   stays valid but absolute scale is **provisional** until a known-distance pin.
+
+## 2026-11-12 OAK retest
+
+The new host-stereo experiment uses a separately downloaded **v5.3.0** HEF to match
+the installed runtime, without changing this card's historical v5.4.0 experiment.
+See `docs/OAK_HOST_STEREO.md` and benchlog for hashes and measurements. The new probe
+requests dequantized FLOAT32 output; the older wrapper returns raw UINT8 values,
+which are not established pixel disparities. No historical accuracy claim is added.
+Vendor YAML labels StereoNet MIT, but missing upstream licence remains unresolved;
+existing bench-only/not-product-cleared status is retained.

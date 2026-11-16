@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GARUDA — Stereo 3D view</title>
+<style>
+html,body{margin:0;height:100%;background:#05080e;color:#edf3fa;font-family:Inter,"Segoe UI",Arial,sans-serif;overflow:hidden}
+#bar{position:fixed;left:0;right:0;top:0;display:flex;gap:14px;align-items:center;padding:8px 14px;background:#111a28e6;border-bottom:1px solid #283448;font-size:14px;z-index:2;flex-wrap:wrap}
+#bar b{letter-spacing:.06em}#bar .pill{border:1px solid #ffbf69;color:#ffbf69;border-radius:999px;padding:2px 9px;font-size:12px}
+#bar button,#bar select{background:#1b2738;color:#edf3fa;border:1px solid #283448;border-radius:6px;padding:5px 10px;font-size:13px;cursor:pointer}
+#status{margin-left:auto;color:#94a4ba}
+#cloud{position:fixed;left:0;top:0;width:100vw;height:100vh;display:block;cursor:grab;touch-action:none}
+#help{position:fixed;left:14px;bottom:10px;color:#94a4ba;font-size:12px;max-width:70vw;z-index:2}
+</style></head>
+<body>
+<div id="bar"><b>STEREO 3D VIEW</b><span class="pill">ONE VIEWPOINT · UNVALIDATED</span>
+<button id="front">Front</button><button id="top">Top</button><button id="side">Side</button><button id="pause">Pause</button>
+<label>Detail <select id="detail"><option value="8">Coarse</option><option value="4">Fine</option><option value="2" selected>Full</option></select></label>
+<span id="status">Connecting…</span></div>
+<canvas id="cloud"></canvas>
+<div id="help">Drag to rotate · scroll to zoom · double-click to reset. Built from a single stereo frame: surfaces facing away from the camera, and anything hidden behind an object, are missing. Distances are not validated against a tape measure.</div>
+<script src="/demo/controller.js"></script><script src="/demo/cloud.js"></script>
+</body></html>

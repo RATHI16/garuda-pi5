@@ -737,3 +737,40 @@ Fresh-machine installation remains unverified. The guide identifies the Hailo
 HEFs being required at startup, moving XRCE transitive dependencies and unrecorded
 QGC version. Existing flight/replay evidence is distinguished from complete-orbit,
 physical gesture, cooled-soak and clean-install tests still pending.
+
+
+## 2026-11-12 — OAK-D Pro: separate owner process, two-session split, PTP/ROS installs deferred
+
+**Owner process.** The OAK is opened by one non-root service (`garuda-oak-preview`, isolated
+DepthAI 3.12.1 venv) which serves frames to `garuda-mono` over loopback. This supersedes the
+same-day handoff's plan to open the device inside `garuda_mono.py` with a shared
+`--system-site-packages` venv. Reason: DepthAI allows one opener per device, and keeping it out
+of the Hailo process leaves the Hailo Python environment untouched. Stereo depth, IMU and the
+video encoder will be added to that same owner, not to new device openers.
+
+**Two sessions, one contract.** Owner directed that the Claude session and the Codex session
+("Astra") both work on the OAK. Split, mailbox, Pi lock and the `/pair` interface are in
+`docs/oak-coordination.md`. Claude: consolidation, distance estimator, mono integration, UI,
+harnesses, offline IMU analysis. Astra: owner process, stereo and pairing, video link, final
+concurrent run.
+
+**Scope change (owner, in-session): defer PTP and ROS/Docker installs** until after the final
+concurrent test review. Nothing before that point consumes them, and each needs a system
+install. The original work order's time-base and topic-contract steps stay open; no VIO, EKF2
+or cross-machine timing claim is made until a time reference exists.
+
+**Consolidation.** Today's OAK work was uncommitted across the main checkout and
+`.worktrees/px4-gazebo-demo`. It was copied (sources untouched) onto `feat/oak-d-pro`;
+`docs/oak-consolidation-manifest.md` lists sources and hashes. No Pi change was made.
+
+## 2026-11-12 — Owner changes OAK role to capture and encoding only
+
+Owner explicitly rejected RVC2 stereo depth and requested Pi CPU baseline followed
+by Hailo learned stereo evaluation. This supersedes the original bring-up brief's
+on-camera depth choice. Standing backend now uses Pi rectification, SGBM and RGB
+projection; OAK supplies camera streams and optional hardware H.265 only. IMU is
+not enabled on this path. Prior IMU results remain evidence, not an active feature.
+See `OAK_HOST_STEREO.md`. StereoNet official HEF evaluation retains the repository's
+existing bench-only licence restriction; vendor MIT metadata does not silently
+resolve the missing upstream licence. Live NPU depth is not enabled based merely
+on successful inference. Physical validation remains open.

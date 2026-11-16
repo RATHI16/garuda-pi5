@@ -7,8 +7,8 @@ controlPanel.innerHTML=`<div><div class="tuning">
 <label>Speed cap <output id="speedValue">2.2 m/s</output><input id="speedSetting" type="range" min="0.25" max="3" step="0.05" value="2.2" aria-label="Simulated speed cap"></label>
 </div><div class="controlnote" id="tuningNote">Simulation settings. Calibrate the floor to relate map distances to metres.</div>
 <div class="positionChoice">Follow position <button id="sideLeft">Left</button><button id="sideBehind" class="active">Behind</button><button id="sideRight">Right</button><button id="tuningReset">Reset settings</button></div></div>
-<div><div class="controlmodes"><label><input id="gestureEnabled" type="checkbox"> Gesture control</label><label><input id="faceEnabled" type="checkbox"> Face-confirmed return</label><div class="faceactions"><button id="faceEnroll" disabled>Enroll selected face</button><button id="faceForget" disabled>Forget face</button></div></div>
-<p class="identityline" id="faceStatus">Face matching off</p><p class="gesturehelp" id="gestureHelp">One arm up → take off/follow · arms crossed → land · T pose → circle · both hands overhead → hold. Enable gestures and hold each pose for one second.</p><p class="controlnote">Pose: Hailo-10H · Optional face: Pi CPU · Enrollment stays in this tab. Camera modes are shared by viewers.</p></div>`;
+<div><div class="controlmodes"><label><input id="gestureEnabled" type="checkbox"> Gesture control</label><label><input id="faceEnabled" type="checkbox"> Face-confirmed return</label><div class="faceactions"><button id="faceEnroll" disabled>Enroll selected face…</button><button id="faceForget" disabled>Forget all faces</button></div></div>
+<p class="identityline" id="faceStatus">Face matching off</p><p class="gesturehelp" id="gestureHelp">One arm up → take off/follow · arms crossed → land · T pose → circle · both hands overhead → hold. Enable gestures and hold each pose for one second.</p><p class="controlnote">Pose: Hailo-10H · Optional face: Pi CPU · Enrolled faces and names are kept in this browser only. Camera modes are shared by viewers.</p></div>`;
 document.querySelector('.stage').before(controlPanel);
 const gesturePanel=document.createElement('div');gesturePanel.className='gestureReadout';
 gesturePanel.innerHTML='<div><small>GESTURE · HAILO-10H POSE</small><strong id="gestureName">GESTURE CONTROL OFF</strong><span id="gestureDetail">Enable gesture control to begin.</span></div><button id="gestureStart">Enable gestures</button><p>ONE ARM UP → TAKE OFF / FOLLOW · ARMS CROSSED → LAND · T POSE → CIRCLE · BOTH HANDS OVERHEAD → HOLD<br>Keep both hands and shoulders visible. Hold for one second. Follow gap sets circle radius.</p>';
@@ -34,17 +34,27 @@ $('faceEnabled').onchange=async()=>{faceBusy=true;controlError='';const enabled=
   try{const response=await fetch('/api/demo_face?enabled='+(enabled?'1':'0'),{method:'POST'}),result=await response.json();if(!response.ok||!result.available&&enabled)throw Error('Face models unavailable');F.setFaceMode(enabled);}
   catch(e){$('faceEnabled').checked=!enabled;controlError=e.message;}
   finally{faceBusy=false;}};
-$('faceEnroll').onclick=()=>F.enroll();
-$('faceForget').onclick=()=>F.setFaceMode(F.faceEnabled);
+try{F.setPeople(JSON.parse(localStorage.getItem('garuda-face-people')||'[]'));}catch(e){}
+F.onPeople=people=>{try{people.length?localStorage.setItem('garuda-face-people',JSON.stringify(people)):localStorage.removeItem('garuda-face-people');}catch(e){}};
+$('faceEnroll').onclick=()=>{const name=Garuda.cleanName(prompt('Name for this face (kept in this browser only):',F.nameOf(F.id)||''));if(!name)return;F.enroll(name);};
+$('faceForget').onclick=()=>{F.setFaceMode(F.faceEnabled);F.forgetPeople();};
 function updateControls(o,now=performance.now()){
+  if(O){ // camera on the vehicle: nothing on this page flies anything
+    $('airState').textContent='CAMERA ON VEHICLE · command is shown, not sent';
+    for(const id of ['takeoff','land','followTarget','circleTarget']){$(id).disabled=true;$(id).className='';}
+  }else if(V){ // linked: the buttons describe and command the PX4 lab's vehicle, nothing else
+    $('airState').textContent=V.contact?'PX4 LAB · '+V.mode+' · '+(V.altitude===null?'—':V.altitude.toFixed(1)+' m')+' · SIMULATED':'PX4 LAB · NO CONTACT';
+    $('takeoff').disabled=!V.can.takeoff;$('land').disabled=!V.can.land;$('followTarget').disabled=!V.can.follow;$('circleTarget').disabled=!V.can.circle;
+    $('circleTarget').className=V.mode==='CIRCLE'?'selected':'';$('followTarget').className=V.mode==='FOLLOW'?'selected':'';
+  }else{
   $('airState').textContent=F.airState+' · '+F.altitude.toFixed(1)+' m simulated altitude';
   $('takeoff').disabled=F.airState!=='GROUNDED';$('land').disabled=['GROUNDED','LANDING'].includes(F.airState);
-  $('circleTarget').disabled=F.id===null;
-  $('circleTarget').className=F.flightStyle==='circle'?'selected':'';$('followTarget').className=F.flightStyle==='follow'?'selected':'';
+  $('circleTarget').disabled=F.id===null;$('followTarget').disabled=false;
+  $('circleTarget').className=F.flightStyle==='circle'?'selected':'';$('followTarget').className=F.flightStyle==='follow'?'selected':'';}
   $('gestureEnabled').disabled=gestureBusy;$('faceEnabled').disabled=faceBusy;
   $('faceEnroll').disabled=!F.faceEnabled||F.id===null||F.enrolling||!S?.face_service?.ready;
   $('faceForget').disabled=!F.faceEnabled;
-  let msg=controlError||F.faceMessage;
+  let msg=controlError||F.faceMessage;if(!controlError&&F.faceEnabled&&!F.enrolling&&F.people.length)msg+=' • knows '+F.people.map(p=>p.name).join(', ');
   if(F.faceEnabled&&!S?.face_service?.enabled)msg='Face service off • toggle face mode to restart';
   else if(F.faceEnabled&&S?.face_service?.error)msg='Face service: '+S.face_service.error;
   else if(F.faceEnabled&&!S?.face_service?.ready)msg='Loading face models on Pi CPU…';
@@ -63,10 +73,16 @@ function updateControls(o,now=performance.now()){
     else if(gesture){title=({follow_me:'TAKE OFF / FOLLOW',circle:'CIRCLE TARGET',land:'LAND',stop:'STOP / HOLD'})[gesture]||gesture.replaceAll('_',' ').toUpperCase();detail='Person #'+F.id+' · Gesture ID: '+gesture+' · '+(F.paused?'Simulation paused':'Simulation gesture control active');active=true;}
     else{title='NO GESTURE DETECTED';detail='Person #'+F.id+' · Raise your arm above your head and hold for one second.';}
   }
-  $('gestureName').textContent=title;$('gestureDetail').textContent=detail;gesturePanel.dataset.active=String(active);
-  $('gestureStart').hidden=F.gesturesEnabled;$('gestureStart').disabled=gestureBusy;
+  if(V&&F.gesturesEnabled)detail+=' Linked: gestures seen by this page do not command the PX4 lab.';
+  $('gestureName').textContent=title;$('gestureDetail').textContent=detail;gesturePanel.dataset.active=String(active);gesturePanel.dataset.on=String(F.gesturesEnabled||gestureBusy);
+  $('gestureHelp').hidden=!(F.gesturesEnabled||gestureBusy);$('gestureStart').hidden=F.gesturesEnabled;$('gestureStart').disabled=gestureBusy;
   if(F.gesturesEnabled&&S?.detector.mode!=='pose')$('gestureHelp').textContent='Pose mode changed on another display. Toggle Gesture control to restart.';
   else if(F.gesturesEnabled)$('gestureHelp').textContent='One arm up: take off/follow · crossed arms: land · T pose: circle · both hands overhead: hold · point: change side. Only the selected person controls an active lock.';
-  $('tuningNote').textContent=cal?'Calibrated floor estimate. Gap is a goal; the home travel boundary takes priority.':'Requested simulation settings; map is schematic until floor calibration. Values are not measured separation.';
-  for(const [id,side]of[['sideLeft',-1],['sideBehind',0],['sideRight',1]])$(id).className=F.side===side?'active':'';
+  $('tuningNote').textContent=V?'Requests to the PX4 lab; the values shown are the ones it applies. Follow position (left/behind/right) is not available for it. '+(V.kind==='mono_estimate'?'Positions are schematic (one-lens camera), not measured distances.':'Distances come from the stereo camera (unvalidated) and an assumed camera position.'):stereoFollowing()?'Map distances come from the stereo camera (unvalidated); the origin is the camera. Gap is a goal; the travel boundary takes priority.':caps.distance==='mono_estimate'&&!cal?'One-lens camera: the map is schematic until floor calibration. Values are not measured separation.':cal?'Calibrated floor estimate. Gap is a goal; the home travel boundary takes priority.':'Requested simulation settings; map is schematic until floor calibration. Values are not measured separation.';
+  // Linked: the lab has no side-offset follow, so those buttons are not offered; and the numbers
+  // beside the sliders are what the lab reports it applies, with the request when it differs.
+  for(const [id,side]of[['sideLeft',-1],['sideBehind',0],['sideRight',1]]){$(id).className=!V&&F.side===side?'active':'';$(id).disabled=!!V;$(id).title=V?'Not available for the PX4 lab vehicle':'';}
+  for(const [name,key,unit,digits]of[['gap','gap',' m',1],['radius','limit',' m',1],['speed','speed',' m/s',2]]){
+    const asked=F.settings[name],got=V?V.applied[key]:asked;
+    $(name+'Value').textContent=!V?asked.toFixed(digits)+unit:got===null?'— (lab)':got.toFixed(digits)+unit+(Math.abs(got-asked)>.01?' (asked '+asked.toFixed(digits)+')':'');}
 }

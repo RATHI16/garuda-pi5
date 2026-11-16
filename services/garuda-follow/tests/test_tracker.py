@@ -82,3 +82,21 @@ def test_track_boundary_at_max_age_exact():
     # Re-detect: should get new ID (track was dropped)
     out_after_3_misses = tr2.update([det(0.4, 0.4, 0.2, 0.2)])
     assert all(t.id != id2 for t in out_after_3_misses), "Track should be dropped after max_age+1 misses"
+
+
+def test_wall_time_expires_same_box_before_reassociation():
+    clock=[0.]
+    tracker=Tracker(max_age=3,max_unmatched_s=.5,clock=lambda:clock[0])
+    d=dict(x=10,y=10,w=20,h=20,class_id=0,label='person',confidence=.9)
+    first=tracker.update([d])[0].id
+    clock[0]=.25;tracker.update([])
+    clock[0]=.5
+    assert tracker.update([d])[0].id!=first
+
+def test_wall_time_preserves_continuous_low_rate_detections():
+    clock=[0.];tracker=Tracker(max_age=3,max_unmatched_s=.5,clock=lambda:clock[0])
+    d=dict(x=10,y=10,w=20,h=20,class_id=0,label='person',confidence=.9)
+    first=tracker.update([d])[0].id
+    for t in [.25,.5,.75,1.]:
+        clock[0]=t;assert tracker.update([d])[0].id==first
+    clock[0]=.1;assert tracker.update([d])[0].id!=first

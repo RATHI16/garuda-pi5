@@ -25,3 +25,37 @@
   footer{padding:3px 0 7px;font-size:7px}
 }
 .flightCommands{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 12px 9px}.flightCommands span{width:100%;font-size:10px;color:#6de3e1}.flightCommands button{padding:6px 10px;font-size:11px}.flightCommands button.selected{border-color:#6de3e1;color:#6de3e1}.flightCommands button:disabled{opacity:.45;cursor:default}.decision[data-mode=CIRCLE] h2,.decision[data-mode=TAKEOFF] h2{color:var(--cyan)}
+
+#rangeBig{position:absolute;left:10px;top:10px;z-index:4;padding:8px 12px 9px;background:#06101ad9;border:1px solid #6de3e166;border-radius:8px;display:flex;flex-direction:column;gap:3px;pointer-events:auto}#rangeBig[hidden],#identityChip[hidden]{display:none}#rangeBig strong{font-size:clamp(30px,3.6vw,50px);line-height:1;color:#fff;font-weight:700;font-variant-numeric:tabular-nums}#rangeBig[data-ok=false] strong{color:#ffbf69}#rangeBig span{font-size:11px;letter-spacing:1.5px;color:#6de3e1}#rangeBig em{font-style:normal;font-weight:700;font-size:10px;letter-spacing:1px;color:#06101a;background:#ffbf69;border-radius:3px;padding:2px 6px;align-self:flex-start}
+#identityChip{position:absolute;left:10px;bottom:10px;z-index:4;padding:6px 10px;border-radius:5px;font-size:12px;font-weight:600;letter-spacing:1px;background:#06101ad9;border:1px solid #7be3a488;color:#7be3a4;pointer-events:none}#identityChip[data-level=warn]{color:#ffbf69;border-color:#ffbf6988}#identityChip[data-level=bad]{color:#ff8a8a;border-color:#ff8a8a88}
+.gestureReadout[data-on=false]{padding:5px 12px}.gestureReadout[data-on=false] p,.gestureReadout[data-on=false] span{display:none}.gestureReadout[data-on=false] strong{font-size:12px;color:#a8bad0;margin:1px 0}
+#labStatus{margin:0;padding:0 12px 8px;color:#ffbf69;font-size:12px}#labStatus[hidden]{display:none}
+
+/* Give perception its own space; never squeeze it to fit the viewport. */
+body{height:auto;min-height:100dvh;display:block}
+main{display:block;min-height:0;padding:14px 2vw 0}
+header{height:58px;padding:7px 2vw;border-bottom-width:3px}
+.brand img{width:140px;height:36px}.brand b{font-size:21px}.powered strong{font-size:19px}
+.intro{margin:0 0 12px}.intro h1{font-size:25px;letter-spacing:-.6px;margin:4px 0}.intro p{font-size:12px}
+.flightSetup{padding:10px 14px;margin:0 0 14px;border-radius:8px}
+.setupChoices{gap:10px 18px;align-items:center}
+.setupChoices label{font-size:12px;gap:4px}.setupChoices strong{font-size:13px;padding:6px 0}
+.setupChoices select,.testModeDetails select{padding:6px 9px;font-size:12px;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:5px;max-width:100%}
+.flightSetup button{min-height:32px;padding:6px 10px;font-size:12px}
+.flightSetup p{font-size:12px;line-height:1.5;margin:7px 0 0;overflow-wrap:anywhere}
+.testModeDetails{margin-top:8px;font-size:12px;color:var(--muted)}
+.testModeDetails summary{width:fit-content}.testModeDetails p{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.testModeDetails a{color:var(--cyan)}
+.stage{grid-template-columns:minmax(0,1.55fr) minmax(320px,1fr);gap:14px;align-items:stretch}
+.cameraPanel{min-width:0;display:flex;flex-direction:column}
+.camera{height:auto;min-height:0;flex:none;aspect-ratio:16/9;width:100%}
+.camera img#feed{position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:contain}
+.flightPanel{min-width:0}.mapwrap{min-height:240px}
+#rangeBig{padding:7px 9px;max-width:45%}#rangeBig strong{font-size:30px}#rangeBig span{font-size:10px;letter-spacing:.8px}
+#identityChip{font-size:11px;letter-spacing:.3px;max-width:90%}
+.bottom{margin-top:12px;grid-template-columns:180px minmax(0,1fr) 270px;gap:12px}
+.insight h2{font-size:16px}.insight p{font-size:12px}.pipeline{flex-wrap:wrap}
+.operator{margin-top:10px;max-height:none;overflow:visible}
+.operator[open]{position:static;box-shadow:none}.operator .journey{margin:10px 0 18px}
+@media(max-width:1000px){.stage{grid-template-columns:1fr}.bottom{grid-template-columns:180px minmax(0,1fr)}.mapwrap{min-height:260px}}
+@media(max-width:600px){main{padding:12px 12px 0}.setupChoices{gap:10px}.setupChoices label{flex:1 1 130px}.bottom{grid-template-columns:1fr}.intro h1{font-size:22px}#rangeBig strong{font-size:24px}.brand img{width:105px}.powered strong{font-size:16px}}

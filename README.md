@@ -1,5 +1,40 @@
 # garuda-pi5 — Garuda SDK bench tier (Raspberry Pi 5 + Hailo-10H)
 
+## New: camera, stereo and flight-lab preview — 16 November 2026
+
+**Start here: [What’s new and how to use it](docs/WHATS_NEW_2026-11.md)** ·
+[Release notes and validation limits](docs/RELEASE_2026-11-16.md) ·
+[Demo setup guide](docs/DEMO_USER_GUIDE.md)
+
+This update adds:
+
+- **OAK-D Pro host stereo:** camera capture/H.265 on the OAK, stereo matching on the Pi,
+  detection on Hailo; selected-person distance, depth view and 3D preview.
+- **Shared OAK / CM3 / USB profiles:** one code base, capability-aware views, fixed-camera
+  or on-drone placement. CM3 still needs a first run on this release.
+- **Person identity and face tools:** appearance re-identification, visible identity state,
+  opt-in browser-local named faces and face-confirmed return.
+- **Unified controls:** camera placement and destination, Take off / Follow / Hold / Land,
+  restored gesture/face/sliders, larger video and compact advanced settings.
+- **PX4/Gazebo testing:** simulated-camera closed loop, live-camera input, command monitor,
+  control leases and a bounded bench yaw trial (3 seconds or 30° then Hold).
+- **Explicit sending and MAVLink bridge:** request-bound hold/follow, freshness/identity
+  checks, fault rehearsal tools, recording and team bring-up documentation.
+
+**This is a source preview, not a flight-approved release.** Stereo is uncalibrated;
+mono depth is an estimate. The new bounded yaw limit has offline controller-path tests
+and grounded installation checks, not a completed airborne validation run. The revised
+settled-handover/±0.20 m altitude rehearsal remains unrun. No real flight controller has
+been contacted by this work. Real-vehicle mode in the unified UI remains unavailable.
+
+Open `http://<pi-address>:8098/demo` after installing/configuring the Pi software.
+The laptop lab is `http://127.0.0.1:8099`. **Pulling this repository does not deploy it**
+or install models/vendor packages. Keep the previous deployment for rollback and follow
+the setup guide; the older installer assets have not been rebuilt for this preview.
+
+---
+
+
 Development bench for **Garuda**, a companion-computer autonomy stack for drones and
 robotics. This repo is the **bench/dev tier**: a Raspberry Pi 5 with a Hailo-10H AI
 accelerator (AI HAT+ 2, 40 TOPS) running live perception services — on-NPU object
@@ -8,10 +43,11 @@ the harnesses, calibration tooling and datasets used to measure all of it. Servi
 written host-agnostic so they later port to a Hailo-15 SoM (product tier).
 
 The flight controller (a Microchip PIC32CZ CA90 running PX4) is a **separate device**
-reached over Ethernet. Hard real-time control never runs on this machine, and **nothing in
-this repo arms motors** — any code that could reach PX4 defaults to a simulated endpoint.
+reached over Ethernet. Hard real-time control never runs on this machine. The isolated SITL controller can arm
+the simulated vehicle. The separate MAVLink bridge has an explicitly gated real-FC path;
+that path is not validated on hardware and is not enabled by the unified UI.
 
-> **Provenance:** Public repository, updated 2026-11-01 from the garuda-sdk-bench development
+> **Earlier provenance:** Public repository, updated 2026-11-01 from the garuda-sdk-bench development
 > branches — Pi baseline `feat/portal-tracking` @ `99db1c5`, PC flight lab `feat/px4-gazebo-demo`
 > @ `72e65cf`. First published 2026-10-24 as a snapshot of `feat/portal-tracking` (that commit
 > remains in this repository's history). Large bench recordings, local environments and model

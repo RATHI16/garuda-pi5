@@ -15,13 +15,17 @@ from urllib.parse import urlparse, parse_qs
 import sys
 sys.path.insert(0, "/home/garuda/garuda-sdk-deploy/hosts/pi5")
 sys.path.insert(0, "/home/garuda/garuda-sdk-deploy/services/garuda-track")
+from mono_timing import Progress
+_progress = Progress()
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from hailo_platform import VDevice, FormatType
 from hailo_yolo26 import HailoYolo26, COCO
 from hailo_yolo26_depth import Yolo26Depth
 from hailo_yolo_world import HailoYoloWorld, N_SLOTS, embed_prompts, set_prompt_checked
 from hailo_yolo_pose import HailoYoloPose
 from bytetrack import ByteTracker
-from mono_state import build_snapshot, attach_kpts, select_track, positive_range, range_valid
+from mono_wait import parse_after, event_stream, WAIT_LIMIT_S
+from mono_state import mount_setting, onboard_obs, build_snapshot, capabilities, attach_kpts, select_by_id, select_track, positive_range, range_valid, prune_unmatched, note_matched
 from mono_demo import asset as demo_asset
 from mono_appearance import describe_people
 from mono_faces import FaceWorker
@@ -35,16 +39,52 @@ Y26D_HEF = "/home/garuda/garuda-sdk-deploy/models/yolo26m-depth_hailo_model/yolo
 DA_IN, DA_OUT = "depth_anything_v2_vits/input_layer1", "depth_anything_v2_vits/conv79"
 CAM_W, CAM_H, CAM_FPS = 1280, 720, 15
 CAM_SRC = os.environ.get("GARUDA_MONO_CAM", "auto")  # auto = CSI, else USB UVC | csi = CM3 only | /dev/videoN = that device only
+SKIP_MONO_DEPTH = os.environ.get("GARUDA_MONO_SKIP_DEPTH", "0") == "1"
 DEPTH_EVERY = int(os.environ.get("GARUDA_MONO_DEPTH_EVERY", "3"))  # DepthAnything every Nth frame; YOLO26 runs every frame
 CONF = float(os.environ.get("GARUDA_MONO_CONF", "0.15"))          # low floor -> ByteTrack's low-conf stage re-associates flickers
 MAX_LOST = int(os.environ.get("GARUDA_MONO_MAXLOST", "25"))
+# Wall-time bound on re-attaching an unmatched track (review item R3). The frame-count window
+# above stretches when frames stall; this does not. Default = the same window at the nominal rate.
+MAX_LOST_S = float(os.environ.get("GARUDA_MONO_MAXLOST_S", str(MAX_LOST / 15.0)))
+# Optional person re-identification embeddings (EVAL-ONLY model; off unless a HEF path is given).
+REID_HEF = os.environ.get("GARUDA_MONO_REID_HEF", "")
+REID_BENCH_CROPS = int(os.environ.get("GARUDA_MONO_REID_BENCH_CROPS", "0"))   # bench only: repeat crops to this count to measure cost
+_reid = {"model": None, "embeddings": {}, "ms": None, "crops": 0, "owner": None}
+from mono_record import Recorder, frame_record, onboard_record
+# Camera-on-vehicle shadow command: computed here, published in /api/state, optionally recorded.
+# This process has no flight-controller link of any kind; nothing below transmits a command.
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "services", "garuda-follow"))
+from onboard_command import OnboardConfig, OnboardFollower, limits as onboard_limits
+_mount_value, MOUNT_LOCKED = mount_setting(os.environ.get("GARUDA_MONO_MOUNT"))   # fixed | vehicle; unset = bench, switchable
+_mount = {"value": _mount_value, "gen": 0}
+_onboard = OnboardFollower(OnboardConfig())
+from mono_transmit import Transmit
+_transmit = Transmit()     # where the operator asked the command to go; this process itself sends nothing
+def _set_mount(value):
+    """Caller holds _lock. Withdraws the published command and the limiter's memory, and makes
+    any computation still in flight for the old mount unpublishable (generation check)."""
+    _mount.update(value=value, gen=_mount["gen"] + 1)
+    _onboard.reset()
+    _transmit.off("camera mount changed")
+    _state.update(onboard=None)
+
+
+_shadow = Recorder(os.path.expanduser("~/garuda-onboard-records"))   # numbers only, bounded, started on request
+import copy
+from mono_identity import IdentityOwner
+# The identity owner keeps the pinned selection across track-ID changes (needs re-ID embeddings).
+# It is only ever replaced, together with the frame its decision belongs to, at publication.
+_recorder = Recorder(os.path.expanduser("~/garuda-reid-records"))    # numbers only, started on request, self-stopping
 REACQ = int(os.environ.get("GARUDA_MONO_REACQ", "5"))            # coasting frames before yielding to a live same-class track       # coast a locked track this many frames through misses (~1s)
 RANGE_STALE_MS = 1500
-CAL_FILE = os.path.expanduser("~/garuda-sdk-deploy/hosts/pi5/mono_cal.json")  # cal survives restarts
+CAL_FILE = os.path.expanduser("~/garuda-sdk-deploy/hosts/pi5/mono_cal_oak.json" if CAM_SRC == "oak" else "~/garuda-sdk-deploy/hosts/pi5/mono_cal.json")  # calibration belongs to the camera
 DEPTH_SRC = os.environ.get("GARUDA_MONO_DEPTH", "y26d")               # y26d = metric YOLO26-depth | da = DepthAnything relative (needs cal)
 WORLD_CONF = float(os.environ.get("GARUDA_MONO_WORLD_CONF", "0.10"))  # yolo_world scores sit lower than YOLO26's
 WORLD_MAX_FAILS = int(os.environ.get("GARUDA_MONO_WORLD_MAX_FAILS", "10"))  # consecutive world-infer errors -> auto-revert
 POSE_MAX_FAILS = int(os.environ.get("GARUDA_MONO_POSE_MAX_FAILS", "10"))    # consecutive pose-infer errors -> auto-revert
+OAK_PAIR = os.environ.get("GARUDA_MONO_OAK_PAIR", "0") == "1"       # 1 = fetch RGB+stereo depth via /pair (needs the stereo owner); 0 = RGB-only /frame
+OAK_BOX = os.environ.get("GARUDA_MONO_OAK_BOX", "0") == "1"         # 1 = RGB via /frame, locked person's depth via the owner's /box-depth (host stereo)
+_oak = {"store": None, "backend": None, "view_t": 0.0, "box": None}            # stereo pair store / backend (set only with OAK_PAIR); last depth-view request
 _engine = {"name": DEPTH_SRC}                                     # live depth-engine selector (boot default DEPTH_SRC; POST /api/depth_engine switches it)
 # live detector selector: primary = COCO-80 YOLO26 | world = prompt-driven yolo_world_v2s | pose = yolov8m_pose.
 # `gen` bumps on every swap so loop() knows to reset the tracker (the label space changed).
@@ -54,11 +94,23 @@ _pose = {"det": None}                                             # HailoYoloPos
 _gest = {"fsm": None, "handoff_fsm": None, "handoff_last_id": None,  # subject/bystander GestureFSMs (pose mode only)
          "out": {"name": None, "track_id": None, "held_ms": 0}}
 _vd = {"h": None}                                                 # the shared VDevice (set in main)
-_lockid = {"id": None, "pinned": False}                           # explicit clicks never hand off silently
+_lockid = {"id": None, "pinned": False, "gen": 0}                 # gen counts operator selections; results for an older gen are not published
+
+
+def _operator_select(tid, pinned):
+    """Every selection change that is not the identity owner following the same person.
+    Caller holds _lock."""
+    _lockid.update(id=tid, pinned=pinned, gen=_lockid["gen"] + 1)
+    _state["onboard"] = None        # the published vehicle command belonged to the old selection
+    _onboard.reset()                 # and so does the limiter's memory
+    _transmit.off("selection changed")   # sending never carries over to another selection
+                           # explicit clicks never hand off silently
 _ema = {"raw": None}                                              # smoothed depth (steady distance readout)
 EMA_A = float(os.environ.get("GARUDA_MONO_EMA", "0.3"))
 
 _lock = threading.Lock()
+_frame_ready = threading.Event()     # set when an OAK frame arrives, so loop() need not poll for it
+_result = threading.Condition()      # notified after each published result, for waiting /api/state reads
 _det_lock = threading.Lock()      # serialises detector swap (create/configure) against loop()'s infer
 _frame = {"img": None, "seq": 0, "t": 0.0, "source": None, "epoch": uuid.uuid4().hex}
 _state = {"class": "person", "raw": None, "bbox": None, "conf": 0.0, "count": 0, "t": 0.0,
@@ -69,7 +121,10 @@ _jpg = {"buf": None}
 _streams = {"clean": 0, "annotated": 0}
 _faces = FaceWorker(os.path.expanduser("~/garuda-sdk-deploy/models/faces"))
 _track_gestures = {}
-_stats = {"ids": set(), "fps": 0.0, "_n": 0, "_t0": time.monotonic(), "temp": None, "_tt": 0.0}
+_stats = {"ids": set(), "fps": 0.0, "_n": 0, "_t0": time.monotonic(), "temp": None, "_tt": 0.0,
+          "inferences": 0}                                         # completed loop() iterations since process start
+INSTANCE = uuid.uuid4().hex                                        # identifies this process; counters restart with it
+_transmit.instance = INSTANCE                                      # sender statements about a request must name this process
 
 
 def _stats_tick(tracks_full):
@@ -139,6 +194,42 @@ def capture_thread():
 
     GARUDA_MONO_CAM: auto (default) = CSI if a camera answers, else first working USB UVC,
     re-probing both whenever the active source dies | csi = CM3 only | /dev/videoN = that device only."""
+    if CAM_SRC == "oak":
+        frame_key = None
+        if OAK_PAIR:                                     # stereo modules are imported ONLY on this path, so
+            from oak_capture import OakPairBackend       # the default path runs without them being deployed
+            from oak_stereo_state import PairDepthStore, frame_key
+            store = PairDepthStore()
+            def on_pair(pair):
+                with _lock:
+                    store.put(pair)
+            def on_epoch_change(_epoch):                 # old run's depth is unusable; loop() resets itself from the frame epoch
+                with _lock:
+                    store.clear()
+            backend = OakPairBackend(on_pair=on_pair, on_epoch_change=on_epoch_change,
+                                     # depth bytes while a target is locked or someone is watching the depth view
+                                     want_depth=lambda: (_lockid["id"] is not None
+                                                         or time.monotonic() - _oak["view_t"] < 3.0))
+            _oak.update(store=store, backend=backend)
+        else:
+            from oak_capture import OakRGBBackend
+            backend = OakRGBBackend()
+            if OAK_BOX:                                  # host stereo: number per frame from /box-depth, full maps only for the views
+                from oak_stereo_state import PairDepthStore, frame_key
+                from oak_box import BoxStereo
+                from oak_pair import read_pair
+                _oak.update(store=PairDepthStore(), box=BoxStereo())
+                threading.Thread(target=_oak_view_loop, args=(read_pair,), daemon=True).start()
+        backend.configure(CAM_W, CAM_H, CAM_FPS)
+        def on_frame(meta, pixels):
+            img = np.frombuffer(pixels, dtype=np.uint8).reshape(meta.height, meta.width, 3)
+            with _lock:
+                _frame.update(img=img, received_ns=time.monotonic_ns(), seq=_frame["seq"]+1, t=meta.t_capture_ns/1e9,
+                              source="oak-rgb", epoch=meta.sensor, capture_ns=meta.t_capture_ns,
+                              pair_key=frame_key(meta.sensor, meta.frame_id) if frame_key else None)
+            _frame_ready.set()
+        backend.start(on_frame)
+        return
     while True:
         if CAM_SRC == "csi":
             _run_csi()
@@ -264,29 +355,75 @@ def _activate_world(vd, prompt, emb, probe_img):
     return set_prompt_checked(_world["det"], prompt, emb, None, probe_img)
 
 
+def _oak_view_loop(read_pair):
+    """Box mode: fetch full depth maps from the owner only while a depth view is open.
+    The owner computes them on demand, so a closed view costs nothing. read_pair is handed in
+    by the box-mode start-up, so this module needs no stereo import outside a stereo flag."""
+    from urllib.request import urlopen
+    cursor = None
+    while True:
+        if time.monotonic() - _oak["view_t"] >= 3.0:
+            time.sleep(0.2); continue
+        try:
+            q = "/pair-preview?depth=1" + (f"&after={cursor[1]}&epoch={cursor[0]}" if cursor else "")
+            with urlopen("http://127.0.0.1:8096" + q, timeout=3) as r:
+                if r.status == 204:
+                    continue
+                pair = read_pair(r, int(r.headers["Content-Length"]), (CAM_W, CAM_H), allow_unqualified_preview=True)
+            cursor = pair.key
+            if pair.depth_mm is not None:
+                with _lock:
+                    _oak["store"].put(pair)
+        except Exception:
+            time.sleep(0.3)
+
+
 def loop(det, engines):
     tracker = _new_tracker()
     last_seq = -1; n = 0; depth = None; cur_engine = _engine["name"]; cur_gen = _detector["gen"]
     fails = 0; was_world = False; was_pose = False
+    matched_t = {}                                       # track id -> capture time of its last matched frame
+    gate = None
+    if OAK_PAIR or OAK_BOX:                              # both stereo modes carry camera epochs: same restart rules
+        from oak_stereo_state import EpochGate
+        gate = EpochGate()
     while True:
         if _viewers["n"] == 0:
             time.sleep(0.2); continue
         with _lock:
             img = _frame["img"]; seq = _frame["seq"]
             capture_t = _frame["t"]; capture_source = _frame["source"]; capture_epoch = _frame["epoch"]
+            received_ns = _frame.get("received_ns")
+            pair_key = _frame.get("pair_key"); capture_ns = _frame.get("capture_ns")
         if img is None or seq == last_seq:
-            time.sleep(0.02); continue
+            _frame_ready.wait(0.02); _frame_ready.clear(); continue
         last_seq = seq
+        inference_start_ns = time.monotonic_ns()
         H, W = img.shape[:2]
         with _lock:
-            want_cls = _state["class"]; lid = _lockid["id"]; pinned = _lockid["pinned"]
+            want_cls = _state["class"]; lid = _lockid["id"]; pinned = _lockid["pinned"]; sel_gen = _lockid["gen"]
+        staged_owner = None; decision = None; operator_lid = lid
         if _engine["name"] != cur_engine:                # live engine switch -> drop stale depth/EMA
             depth = None; _ema["raw"] = None; cur_engine = _engine["name"]
+        # OAK owner restarted -> everything derived from the old run is discarded. Decided from the
+        # epoch of the frame being processed (after the skip check above), so it cannot be lost.
+        if gate is not None and _oak["store"] is not None and gate.entering(capture_epoch):
+            tracker = _new_tracker(); _track_gestures.clear(); _ema["raw"] = None; depth = None
+            _gest["fsm"] = GestureFSM(); _gest["handoff_fsm"] = GestureFSM(); _gest["handoff_last_id"] = None
+            with _lock:
+                _operator_select(None, False); sel_gen = _lockid["gen"]   # this frame is processed under the reset selection
+                _gest["out"] = {"name": None, "track_id": None, "held_ms": 0}
+                _state.update(raw=None, bbox=None, conf=0.0, count=0, tracks_full=[], dets=[],
+                              stereo=None, lock_id=None, lock_coasting=False, identity=None)
+                _reid["owner"] = None                    # the old run's identity and gallery end with it
+                if OAK_BOX:                              # the old run's full maps must not reach the depth views
+                    _oak["store"].clear()
+            lid = None; pinned = False
         if _detector["gen"] != cur_gen:                  # detector swap -> label space changed, restart tracking
             tracker = _new_tracker(); cur_gen = _detector["gen"]
             _track_gestures.clear()
             with _lock:
-                _lockid.update(id=None, pinned=False)
+                _operator_select(None, False); sel_gen = _lockid["gen"]   # this frame is processed under the reset selection
             lid = None; pinned = False
         try:
             with _det_lock:                             # never infer while a swap is (re)configuring
@@ -296,7 +433,7 @@ def loop(det, engines):
                 active = _pose["det"] if was_pose else (_world["det"] if was_world else det)
                 dets = active.infer(img)                # detector EVERY frame -> feeds the tracker
             fails = 0
-            if depth is None or n % DEPTH_EVERY == 0:
+            if not SKIP_MONO_DEPTH and (depth is None or n % DEPTH_EVERY == 0):
                 depth = engines[cur_engine].infer(img)  # active depth engine periodically (for distance)
         except Exception as e:
             print("mono infer error:", e)
@@ -313,8 +450,43 @@ def loop(det, engines):
                 fails = 0
             time.sleep(0.2); continue
         n += 1
+        # A track not matched for longer than MAX_LOST_S of capture time cannot be re-attached under
+        # its old ID, however few frames went by in between.
+        tracker.tracks = prune_unmatched(tracker.tracks, matched_t, capture_t, MAX_LOST_S)
         tracker.update([((d.x, d.y, d.w, d.h), d.label, float(d.conf)) for d in dets])
+        note_matched(tracker.tracks, matched_t, capture_t)
         alive = [t for t in tracker.tracks if t.confirmed and t.time_since_update <= MAX_LOST]
+        if _reid["model"] is not None:                  # embeddings for the people seen in THIS frame; no decision is made here
+            seen_people = sorted((t for t in alive if t.cls == "person" and t.time_since_update == 0 and t.conf >= 0.5),
+                                 key=lambda t: (t.track_id != lid, -t.conf))[:4]
+            boxes = [tuple(t.bbox) for t in seen_people]
+            if REID_BENCH_CROPS and boxes:
+                boxes = (boxes * REID_BENCH_CROPS)[:min(4, REID_BENCH_CROPS)]
+            try:
+                with _det_lock:
+                    vectors = _reid["model"].embed(img, boxes)
+                timing = _reid["model"].last_timing
+                _reid.update(embeddings={t.track_id: v for t, v in zip(seen_people, vectors) if v is not None},
+                             ms=timing["total_ns"] / 1e6, crops=timing["crops"], frame_seq=seq)
+            except Exception as e:                      # a re-ID fault must never stop detection
+                print("re-id error:", e)
+                _reid.update(embeddings={}, ms=None, crops=0)
+            # One identity decision for everyone downstream: if the pinned person's track ID
+            # changed, move the camera's own selection to the new ID (or hold when unsure).
+            # Worked out on a COPY: nothing authoritative changes until this frame is published
+            # (after the camera-run and selection checks), so a result that is thrown away can
+            # neither move the selection nor announce a re-bind (astra-0062 finding 2).
+            if pinned and lid is not None:
+                staged_owner = copy.deepcopy(_reid["owner"]) if _reid["owner"] is not None else IdentityOwner()
+                if staged_owner.tid is None or getattr(staged_owner, "selection_gen", None) != sel_gen:
+                    staged_owner.select(lid, capture_t)  # an operator selection starts a fresh identity
+                    staged_owner.selection_gen = sel_gen
+                decision = staged_owner.update(capture_t, [dict(id=t.track_id, emb=_reid["embeddings"].get(t.track_id), pos=None)
+                                                           for t in alive if t.cls == "person" and t.time_since_update == 0])
+                lid = decision["target"]                # this frame's lock and stereo are for the decided track
+            else:
+                staged_owner = IdentityOwner()
+                decision = staged_owner.summary(capture_t)
         appearances = describe_people(img, alive)
         locked = select_track(alive, lid, want_cls, pinned, REACQ)
         with _lock:
@@ -383,32 +555,103 @@ def loop(det, engines):
             gest_out = {"name": None, "track_id": None, "held_ms": 0}
             _gest["fsm"] = GestureFSM(); _gest["handoff_fsm"] = GestureFSM()
             _gest["handoff_last_id"] = None
+        stereo = None
+        if OAK_PAIR and _oak["store"] is not None:      # stereo depth of the locked target, for THIS frame only
+            from oak_stereo_state import measure_entry
+            lk = next((t[8] for t in tracks_full if locked is not None and t[0] == locked.track_id and len(t) > 8), None)
+            with _lock:                                 # lookup only; the depth array itself is never mutated
+                entry = _oak["store"].get(pair_key) if pair_key is not None else None
+            try:
+                stereo = measure_entry(entry, pair_key, ebbox, lk, coasting,
+                                       target_class=locked.cls if locked is not None else None)
+            except Exception as e:                      # a stereo fault must never stop detection
+                print("stereo measurement error:", e)
+                stereo = {"status": "unavailable", "reason": "estimator_error", "z_m": None}
+            stereo["capture"] = dict(_oak["backend"].counters)
+        elif OAK_BOX and _oak["box"] is not None:       # host stereo, matched only in the locked person's torso region of THIS frame
+            lk = next((t[8] for t in tracks_full if locked is not None and t[0] == locked.track_id and len(t) > 8), None)
+            try:
+                stereo = _oak["box"].measure(pair_key, capture_ns, ebbox, lk, coasting,
+                                             target_class=locked.cls if locked is not None else None)
+            except Exception as e:                      # a stereo fault must never stop detection
+                print("box stereo error:", e)
+                stereo = {"status": "unavailable", "reason": "estimator_error", "z_m": None}
+            stereo["capture"] = dict(_oak["box"].counters)
+        onboard = None; mount_gen = _mount["gen"]
+        if _mount["value"] == "vehicle":                # shadow command for THIS frame; never transmitted
+            try:
+                caps = capabilities(capture_source, OAK_PAIR or OAK_BOX, not SKIP_MONO_DEPTH, _engine["name"], "vehicle")
+                now_s = time.monotonic()
+                onboard = _onboard.step(onboard_obs(tracks_full, locked.track_id if locked else None, coasting, W, H,
+                                                    (now_s - capture_t) * 1000.0, decision, caps, stereo, pinned), now_s)
+            except Exception as e:                      # a fault here must never stop detection
+                print("onboard command error:", e)
+                _onboard.reset()
+                onboard = {"valid": False, "reason": "command error", "yaw_rate": 0.0, "forward_vel": 0.0, "vertical_vel": 0.0,
+                           "target_id": None, "range_m": None, "range_source": "none", "forward_reason": "hold"}
+            onboard.update(frame_seq=seq, frame_epoch=f"{capture_epoch}:{cur_gen}", instance=INSTANCE, limits=onboard_limits(_onboard.cfg))
         with _lock:
+            if gate is not None and not gate.may_publish(capture_epoch, _frame["epoch"]):
+                continue                                # a newer run's frame exists: do not publish old-run results
+            if _lockid["gen"] != sel_gen:
+                _onboard.reset()                        # this frame's step ran on the old selection: forget it
+                continue                                # the operator changed the selection during this frame: its lock, stereo and identity are for the old one
+            if staged_owner is not None:                # identity, selection and frame change together
+                _reid["owner"] = staged_owner
+                if pinned and operator_lid is not None and decision["target"] != _lockid["id"]:
+                    _lockid["id"] = decision["target"]  # the owner following the same person: not a new operator selection
+            _state.update(identity=dict(decision, frame_seq=seq, frame_epoch=f"{capture_epoch}:{cur_gen}",
+                                        selection_gen=sel_gen, instance=INSTANCE) if decision is not None else None)
             _gest["out"] = gest_out
+            if _mount["gen"] != mount_gen or _mount["value"] != "vehicle":
+                if onboard is not None:
+                    _onboard.reset()                    # computed across a mount change: never installed
+                onboard = None
+            _state.update(stereo=stereo, onboard=onboard)
             _state.update(raw=raw, bbox=ebbox, conf=econf, count=len(alive), t=capture_t,
-                          frame_seq=seq, frame_source=capture_source, lock_id=locked.track_id if locked else lid,
+                          frame_seq=seq, frame_source=capture_source, pair_key=pair_key if (OAK_PAIR or OAK_BOX) else None, lock_id=locked.track_id if locked else lid,
                           frame_epoch=f"{capture_epoch}:{cur_gen}", frame_w=W, frame_h=H,
                           dets=seen, tracks_full=tracks_full, appearances=appearances,
                           track_gestures=track_gestures(tracks_full, _track_gestures), lock_coasting=coasting)
+        with _result:
+            _result.notify_all()
+        if _recorder.file is not None:                  # identity recording in progress (no pixels are stored)
+            try:
+                _recorder.write(frame_record(seq, capture_t, locked.track_id if locked else lid, pinned, tracks_full, stereo,
+                                             _reid["embeddings"] if _reid.get("frame_seq") == seq else {}, appearances))
+            except Exception as e:
+                print("identity recorder error:", e); _recorder.close()
+        if _shadow.file is not None:                    # carry-around recording in progress (no pixels are stored)
+            try:
+                _shadow.write(onboard_record(seq, capture_t, onboard, ebbox if locked is not None else None, stereo, _soc_temp()))
+            except Exception as e:
+                print("onboard recorder error:", e); _shadow.close()
         _faces.submit(img, tracks_full, seq, f"{capture_epoch}:{cur_gen}", capture_t)
         _stats_tick(tracks_full)
+        _progress.record(seq,capture_epoch,int(capture_t*1e9),received_ns,inference_start_ns)
+        _stats["inferences"] += 1                       # one per fully processed and published frame
+        # The two views are independent: a fault drawing one must never freeze the other.
         try:
-            if _streams["annotated"]:
-                _jpg["buf"] = _draw(img, depth, dets, ebbox, coasting, want_cls, raw)
             if _streams["clean"]:
                 ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
                 if ok:
                     _jpg["clean"] = jpg.tobytes()
+        except Exception as e:
+            print("mono clean view error:", e)
+        try:
+            if _streams["annotated"]:
+                _jpg["buf"] = _draw(img, depth, dets, ebbox, coasting, want_cls, raw)
         except Exception as e:
             print("mono draw error:", e)
 
 
 def _draw(img, depth, dets, ebbox, coasting, cls, raw):
     view = img.copy(); h, w = view.shape[:2]
-    dn = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    thumb = cv2.applyColorMap(cv2.resize(dn, (150, 150)), cv2.COLORMAP_INFERNO)
-    view[8:158, w - 158:w - 8] = thumb
-    cv2.rectangle(view, (w - 158, 8), (w - 8, 158), (230, 230, 230), 1)
+    if depth is not None:                               # no monocular depth in skip-depth mode: no thumbnail
+        dn = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        thumb = cv2.applyColorMap(cv2.resize(dn, (150, 150)), cv2.COLORMAP_INFERNO)
+        view[8:158, w - 158:w - 8] = thumb
+        cv2.rectangle(view, (w - 158, 8), (w - 8, 158), (230, 230, 230), 1)
     for d in dets:                                   # all detections, faint
         cv2.rectangle(view, (int(d.x), int(d.y)), (int(d.x + d.w), int(d.y + d.h)), (150, 150, 150), 1)
         cv2.putText(view, f"{d.label} {d.conf:.2f}", (int(d.x), int(d.y) - 6),
@@ -521,8 +764,14 @@ def make_handler():
                 "cal_n": len(_cal), "fit": (_fit[0] if _fit else None),
                 "frame_w": CAM_W, "frame_h": CAM_H,
                 "gesture": dict(_gest["out"]), "face_service": _faces.status(),
-                "stats": {"fps": round(_stats["fps"], 1), "unique_total": len(_stats["ids"]),
-                          "temp_c": _soc_temp()}})
+                "onboard_max_age_ms": _onboard.cfg.max_age_ms,
+                "transmit": _transmit.snapshot(time.monotonic()),
+                "stats": {"timing": _progress.snapshot(), "fps": round(_stats["fps"], 1), "unique_total": len(_stats["ids"]),
+                          "temp_c": _soc_temp(),
+                          "inferences": _stats["inferences"], "instance": INSTANCE,
+                          "capabilities": dict(capabilities(s.get("frame_source"), OAK_PAIR or OAK_BOX, not SKIP_MONO_DEPTH, _engine["name"], _mount["value"]),
+                                               mount_locked=MOUNT_LOCKED, onboard_recording=_shadow.active()),
+                          **({"reid": {"crops": _reid["crops"], "ms": _reid["ms"]}, "identity": s.get("identity")} if _reid["model"] is not None else {})}})
         def do_GET(self):
             p = urlparse(self.path).path
             if p in ("/", "/index.html"):
@@ -533,6 +782,58 @@ def make_handler():
                     self._send(404, "text/plain", b"not found")
                 else:
                     self._send(200, result[0], result[1])
+            elif p == "/stereo_depth.jpg":             # colourised stereo depth, for looking at only
+                latest = None
+                if (OAK_PAIR or OAK_BOX) and _oak["store"] is not None:
+                    from oak_depth_view import colourise, draw_box
+                    _oak["view_t"] = time.monotonic()    # keeps depth flowing while the view is open
+                    from oak_stereo_state import view_selection
+                    with _lock:                          # outline only if it was measured on the pair shown
+                        latest = view_selection(_oak["store"], _state.get("stereo"), time.monotonic_ns())
+                    if latest is None:
+                        self._send(503, "text/plain", b"no fresh depth frame"); return
+                    view = colourise(latest[1], max_mm=6000, step=2)
+                    if latest[2] is not None:
+                        draw_box(view, latest[2], step=2)
+                    ok, jpg = cv2.imencode(".jpg", view, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    if not ok:
+                        self._send(500, "text/plain", b"encode failed"); return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(jpg)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Stereo-Pair", f"{latest[0][0]}:{latest[0][1]}")
+                    self.send_header("X-Stereo-Outline", "matched" if latest[2] is not None else "none")
+                    self.end_headers()
+                    self.wfile.write(jpg.tobytes())
+                else:
+                    self._send(404, "text/plain", b"stereo is not enabled")
+            elif p == "/stereo_cloud.bin":             # one pair's depth + colour on a coarse grid, for the 3-D view
+                sel = None
+                if (OAK_PAIR or OAK_BOX) and _oak["store"] is not None:
+                    from oak_depth_view import cloud_payload
+                    from oak_stereo_state import view_selection
+                    _oak["view_t"] = time.monotonic()
+                    with _lock:
+                        sel = view_selection(_oak["store"], _state.get("stereo"), time.monotonic_ns())
+                        step = {"2": 2, "4": 4}.get((parse_qs(urlparse(self.path).query).get("step") or [""])[0], 8)
+                        thumb = _oak["store"].thumb(sel[0], step) if sel is not None else None
+                        geometry = _oak["store"].get(sel[0])[1].get("geometry") if sel is not None else None
+                    if sel is None or thumb is None:
+                        self._send(503, "text/plain", b"no fresh depth frame"); return
+                    try:
+                        body = cloud_payload(sel[1], thumb, step=step, geometry=geometry)
+                    except ValueError:
+                        self._send(503, "text/plain", b"depth and colour grids differ"); return
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("X-Stereo-Pair", f"{sel[0][0]}:{sel[0][1]}")
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    self._send(404, "text/plain", b"stereo is not enabled")
             elif p == "/api/mono_range":
                 with _lock:
                     s = dict(_state)
@@ -565,7 +866,20 @@ def make_handler():
                         _viewers["n"] = max(0, _viewers["n"] - 1)
                         _streams[kind] = max(0, _streams[kind] - 1)
             elif p == "/api/state":
-                self._send(200, "application/json", json.dumps(self._snapshot()).encode())
+                ok, after = parse_after(parse_qs(urlparse(self.path).query, keep_blank_values=True))
+                if not ok:
+                    self._send(400, "text/plain", b"bad cursor")
+                else:
+                    waited = None
+                    if after is not None:               # hold the answer until a newer result is published
+                        t0 = time.monotonic()
+                        with _result:
+                            _result.wait_for(lambda: _state.get("frame_seq") != after, timeout=WAIT_LIMIT_S)
+                        waited = (time.monotonic() - t0) * 1000
+                    snap = self._snapshot()
+                    if waited is not None:
+                        snap["waited_ms"] = waited      # lets the reader keep its age estimate conservative
+                    self._send(200, "application/json", json.dumps(snap).encode())
             elif p == "/api/events":
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
@@ -573,12 +887,14 @@ def make_handler():
                 self.send_header("Access-Control-Allow-Origin", "*"); self.end_headers()
                 with _lock:
                     _viewers["n"] += 1
+                def write(snap):
+                    self.wfile.write(b"data: " + json.dumps(snap).encode() + b"\n\n")
+                    self.wfile.flush()
+                def wait_changed(sent, timeout):         # next result as soon as it is published; 10 Hz heartbeat otherwise
+                    with _result:
+                        _result.wait_for(lambda: (_state.get("frame_epoch"), _state.get("frame_seq")) != sent, timeout=timeout)
                 try:
-                    while True:
-                        body = json.dumps(self._snapshot())
-                        self.wfile.write(b"data: " + body.encode() + b"\n\n")
-                        self.wfile.flush()
-                        time.sleep(0.1)                      # <=10 Hz
+                    event_stream(self._snapshot, write, wait_changed)
                 except (BrokenPipeError, ConnectionResetError):
                     pass
                 finally:
@@ -593,10 +909,45 @@ def make_handler():
                 if value not in ("0", "1"):
                     self._send(400, "application/json", b'{"ok":false}'); return
                 self._send(200, "application/json", json.dumps(_faces.configure(value=="1")).encode())
+            elif u.path == "/api/mount":          # bench only: a mount stated in the service environment cannot be changed here
+                value = q.get("value", [""])[0]
+                if value not in ("fixed", "vehicle"):
+                    self._send(400, "application/json", b'{"ok":false,"reason":"value must be fixed or vehicle"}'); return
+                if MOUNT_LOCKED and value != _mount["value"]:
+                    self._send(409, "application/json", b'{"ok":false,"reason":"mount is set by the service configuration"}'); return
+                with _lock:
+                    _set_mount(value)
+                self._send(200, "application/json", json.dumps({"ok": True, "mount": value}).encode())
+            elif u.path == "/api/transmit":       # operator: where the on-vehicle command should be sent (off | sim | fc_hold | fc)
+                try:
+                    with _lock:
+                        _transmit.ask(q.get("target", [""])[0], _mount["value"], time.monotonic())
+                        out = _transmit.snapshot(time.monotonic())
+                    self._send(200, "application/json", json.dumps({"ok": True, "transmit": out}).encode())
+                except ValueError as e:
+                    self._send(409, "application/json", json.dumps({"ok": False, "reason": str(e)}).encode())
+            elif u.path == "/api/transmit_status":  # a sender's heartbeat: what it is doing with the command
+                try:
+                    with _lock:
+                        gen = q.get("generation", [None])[0]
+                        out = _transmit.report(q.get("target", [""])[0], q.get("state", [""])[0], q.get("reason", [""])[0], time.monotonic(),
+                                               None if gen is None else int(gen), q.get("instance", [None])[0],
+                                               {"1": True, "0": False, None: None}[q.get("stream", [None])[0]])
+                    self._send(200, "application/json", json.dumps(dict(out, ok=True)).encode())
+                except (ValueError, KeyError) as e:
+                    self._send(400, "application/json", json.dumps({"ok": False, "reason": str(e)}).encode())
+            elif u.path == "/api/onboard_record":  # carry-around: start a bounded numbers-only recording of the shadow command
+                if _mount["value"] != "vehicle":
+                    self._send(409, "application/json", b'{"ok":false,"reason":"camera mount is not vehicle"}'); return
+                try:
+                    path = _shadow.start(q.get("label", ["carry"])[0], float(q.get("seconds", ["120"])[0]))
+                    self._send(200, "application/json", json.dumps({"ok": True, "path": path}).encode())
+                except ValueError as e:
+                    self._send(409, "application/json", json.dumps({"ok": False, "reason": str(e)}).encode())
             elif u.path == "/api/mono_target":
                 with _lock:
                     _state["class"] = q.get("class", ["person"])[0] or "person"
-                    _lockid.update(id=None, pinned=False)        # explicit class-mode selection
+                    _operator_select(None, False)                # explicit class-mode selection
                 self._send(200, "application/json", b'{"ok":true}')
             elif u.path == "/api/mono_click":     # click (native px) -> lock the TRACK under/nearest it
                 try:
@@ -616,9 +967,23 @@ def make_handler():
                         best_key, picked = key, (tid, lbl)
                 if picked is not None:
                     with _lock:
-                        _lockid.update(id=picked[0], pinned=True); _state["class"] = picked[1]
+                        _operator_select(picked[0], True); _state["class"] = picked[1]
                 self._send(200, "application/json",
                            json.dumps({"ok": picked is not None, "class": picked[1] if picked else None}).encode())
+            elif u.path == "/api/reid_record":    # bench: start a bounded identity recording; this machine only
+                if self.client_address[0] not in ("127.0.0.1", "::1"):
+                    self._send(403, "application/json", b'{"ok":false}'); return
+                try:
+                    path = _recorder.start(q.get("label", [""])[0], float(q.get("seconds", ["0"])[0]))
+                    self._send(200, "application/json", json.dumps({"ok": True, "path": path}).encode())
+                except ValueError as e:
+                    self._send(409, "application/json", json.dumps({"ok": False, "reason": str(e)}).encode())
+            elif u.path == "/api/select_track":   # exact track ID, checked and applied under one lock
+                with _lock:                              # freshness, identity and the selection itself are one step
+                    ok, body = select_by_id(_state, INSTANCE, q, time.monotonic())
+                    if ok:
+                        _operator_select(body["id"], True); _state["class"] = body["label"]
+                self._send(200 if ok else 409, "application/json", json.dumps(body).encode())
             elif u.path == "/api/mono_calibrate":
                 try:
                     dist = float(q.get("dist", ["0"])[0])
@@ -693,7 +1058,7 @@ def make_handler():
                     _activate_world(_vd["h"], prompt, emb, img)
                     _detector.update(mode="world", prompt=prompt, gen=_detector["gen"] + 1)
                     with _lock:
-                        _state["class"] = prompt[0]; _lockid["id"] = None
+                        _state["class"] = prompt[0]; _operator_select(None, _lockid["pinned"])
             except Exception as e:
                 print("mono detector switch failed:", repr(e))
                 return bad(f"{type(e).__name__}: {e}")
@@ -707,7 +1072,11 @@ def main():
     threading.Thread(target=capture_thread, daemon=True).start()
     vd = VDevice(VDevice.create_params()); _vd["h"] = vd
     det = HailoYolo26(YOLO, vdevice=vd, conf_thresh=CONF)
-    engines = {"y26d": Yolo26Depth(Y26D_HEF, vdevice=vd), "da": DepthAnything(vd)}
+    engines = {} if SKIP_MONO_DEPTH else {"y26d": Yolo26Depth(Y26D_HEF, vdevice=vd), "da": DepthAnything(vd)}
+    if REID_HEF:
+        from hailo_osnet import HailoOsnet
+        _reid["model"] = HailoOsnet(REID_HEF, vd)
+        print("re-id embeddings enabled (EVAL-ONLY model):", REID_HEF)
     threading.Thread(target=loop, args=(det, engines), daemon=True).start()
     print("garuda-mono -> http://0.0.0.0:8098/")
     ThreadingHTTPServer(("0.0.0.0", 8098), make_handler()).serve_forever()

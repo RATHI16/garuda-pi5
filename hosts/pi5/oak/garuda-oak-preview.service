@@ -1,0 +1,13 @@
+[Unit]
+Description=Garuda OAK RGB capture and browser preview
+After=network.target
+
+[Service]
+User=garuda
+WorkingDirectory=/home/garuda
+ExecStart=/home/garuda/.venvs/oak-bringup-3.12.1/bin/python -u /home/garuda/oak_preview.py --port 8096
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

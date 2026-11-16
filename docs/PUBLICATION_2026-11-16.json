@@ -1,0 +1,31 @@
+{
+  "source_commit": "d3266445a19a02670d458abaa090da324a92a3a4",
+  "public_parent": "a5827cb0bf16bcb082f9510912f9463de684afa1",
+  "date": "2026-11-16",
+  "kind": "source-preview",
+  "python_tests_passed": 1274,
+  "javascript_tests_passed": 187,
+  "preserved_assets": {
+    "hosts/pi5/units/garuda-mono.service": "33dd8332705fc3e12c15756f894e6d6030ba61dec4119c670d64d7add6ed82a3",
+    "hosts/pi5/units/garuda-mono.service.d/depth.conf": "ae93e92ab86bb6d48e3b3c54913d5896030393549ea7d649ac3d42609c5a43d4",
+    "models/yolo_world_v2s_h10.hef": "489a366562d617ea8428958405e84f37e65775eb4b66e1af112617d1321ef1f0"
+  },
+  "excluded": [
+    ".local/",
+    ".runtime/",
+    "CLAUDE.md (development version)",
+    "bench/results/ (new datasets)",
+    "bench/benchlog.md (development updates)",
+    "bench/versions.md (development updates)",
+    "recordings",
+    "faces",
+    "credentials",
+    "new model binaries"
+  ],
+  "not_run": [
+    "revised airborne settled-handover +/-0.20m test",
+    "airborne bounded-yaw validation",
+    "fresh-machine installation",
+    "real FC/flight validation"
+  ]
+}

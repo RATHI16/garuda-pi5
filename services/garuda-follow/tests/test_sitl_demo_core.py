@@ -63,23 +63,23 @@ def onboard(distance=6):
     return c
 
 def test_onboard_projection_rotates_with_vehicle_attitude():
-    c=onboard();c.velocity([0,0,-1.5],.1,.05,[1,0,0,0])
+    c=onboard();c.velocity([0,0,-1.5],.1,.05,[1,0,0,0],observation_pose=([0,0,-1.5],[1,0,0,0]))
     assert c.target[0]>6 and abs(c.target[1])<.01
-    c.velocity([0,0,-1.5],.1,.05,[math.sqrt(.5),0,0,math.sqrt(.5)])
+    c.velocity([0,0,-1.5],.1,.05,[math.sqrt(.5),0,0,math.sqrt(.5)],observation_pose=([0,0,-1.5],[math.sqrt(.5),0,0,math.sqrt(.5)]))
     assert c.target[1]>6 and abs(c.target[0])<.01
 
 def test_onboard_requires_depth_and_replay_never_commands_motion():
     c=onboard(None)
-    assert c.velocity([0,0,0],.1,.05,[1,0,0,0])==(0,0,None)
+    assert c.velocity([0,0,0],.1,.05,[1,0,0,0],observation_pose=([0,0,-1.5],[1,0,0,0]))==(0,0,None)
     c=onboard();c.snapshot['kind']='replay'
-    assert c.velocity([0,0,0],.1,.05,[1,0,0,0])==(0,0,None)
+    assert c.velocity([0,0,0],.1,.05,[1,0,0,0],observation_pose=([0,0,-1.5],[1,0,0,0]))==(0,0,None)
 
 def test_acceleration_and_orbit_direction():
     c=onboard();c.mode='circle'
-    vn,ve,yaw=c.velocity([0,0,-1.5],.1,.05,[1,0,0,0])
+    vn,ve,yaw=c.velocity([0,0,-1.5],.1,.05,[1,0,0,0],observation_pose=([0,0,-1.5],[1,0,0,0]))
     assert math.hypot(vn,ve)<=c.acceleration*.05+1e-9
     sign=math.copysign(1,ve);c.direction=-1;c.last_velocity=(0,0)
-    assert math.copysign(1,c.velocity([0,0,-1.5],.1,.05,[1,0,0,0])[1])!=sign
+    assert math.copysign(1,c.velocity([0,0,-1.5],.1,.05,[1,0,0,0],observation_pose=([0,0,-1.5],[1,0,0,0]))[1])!=sign
 
 def test_hold_is_immediate_and_stall_resets_gesture_countdown():
     c=selected();assert c.receive(snapshot(2,'stop'),.1)=='hold'
@@ -112,3 +112,26 @@ def test_similar_bystanders_never_auto_reacquire():
         s=snapshot(i+2);s['tracks'][0].update(id=9,appearance=profile)
         s['tracks'].append(dict(s['tracks'][0],id=10));c.receive(s,i*.2);assert c.track(i*.2) is None
     assert c.target_id==7 and c.candidate['ambiguous']
+
+
+def test_observation_pose_required_no_current_pose_fallback():
+    c=onboard()
+    assert c.velocity([5,0,-1.5],.1,.05,[1,0,0,0])==(0,0,None)
+    assert c.target is None
+
+def test_projection_uses_observation_pose_but_control_uses_current_position():
+    c=onboard()
+    # Old image faces north at origin. Vehicle now faces east, 5m north.
+    q=[math.sqrt(.5),0,0,math.sqrt(.5)]
+    c.velocity([5,0,-1.5],.1,.05,q,observation_pose=([0,0,-1.5],[1,0,0,0]))
+    assert 6<c.target[0]<6.2 and abs(c.target[1])<.01
+    assert c.last_velocity[0]<0  # target only ~1.15m away; increase separation
+
+def test_controller_transport_gap_cannot_resume_same_epoch_without_selection():
+    c=onboard()
+    assert c.track(1.) is None
+    newer=dict(c.snapshot);newer['frame']=dict(newer['frame'],seq=2);newer['age_ms']=0
+    c.receive(newer,1.1)
+    assert c.track(1.1) is None and c.lock_state=='RESELECT'
+    c.select(7)
+    assert c.track(1.1) is not None

@@ -1,0 +1,16 @@
+[Unit]
+Description=Garuda OAK calibration workspace (bench, no factory writes)
+After=network.target garuda-oak-preview.service
+
+[Service]
+User=garuda
+WorkingDirectory=/home/garuda/garuda-calibration
+ExecStart=/usr/bin/python3 /home/garuda/garuda-calibration/oak_calibration.py --port 8099
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

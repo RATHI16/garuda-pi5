@@ -103,7 +103,8 @@ class HailoYolo26:
         self.in_h, self.in_w = tuple(self.im.input(self.iname).shape)[:2]
 
     def infer(self, bgr):
-        import cv2
+        import cv2, time
+        t0 = time.monotonic_ns()
         if bgr.ndim == 2:
             bgr = cv2.cvtColor(bgr, cv2.COLOR_GRAY2BGR)
         h, w = bgr.shape[:2]
@@ -121,8 +122,13 @@ class HailoYolo26:
             buf = np.zeros(self.shapes[on], np.float32)
             b.output(on).set_buffer(buf)
             outs[on] = buf
+        t1 = time.monotonic_ns()
         self.cm.run([b], self.timeout_ms)
-        return decode_yolo26(outs, w, h, self.prefix, self.conf, lb=(r, px, py))
+        t2 = time.monotonic_ns()
+        dets = decode_yolo26(outs, w, h, self.prefix, self.conf, lb=(r, px, py))
+        # Where one detection's time goes: host pre-processing, the Hailo call, host decode.
+        self.last_timing = dict(pre_ns=t1 - t0, run_ns=t2 - t1, post_ns=time.monotonic_ns() - t2)
+        return dets
 
     def close(self):
         try:

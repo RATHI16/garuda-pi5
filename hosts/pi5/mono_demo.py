@@ -9,8 +9,12 @@ ASSETS = {
     "/demo/controller.js": ("controller.js", "text/javascript"),
     "/demo/app.js": ("app.js", "text/javascript"),
     "/demo/controls.js": ("controls.js", "text/javascript"),
+    "/demo/flight-setup.js": ("flight-setup.js", "text/javascript"),
+    "/demo/lab.js": ("lab.js", "text/javascript"),
     "/demo/controls.css": ("controls.css", "text/css"),
     "/demo/microchip.png": ("microchip.png", "image/png"),
+    "/demo/cloud": ("cloud.html", "text/html; charset=utf-8"),
+    "/demo/cloud.js": ("cloud.js", "text/javascript"),
 }
 
 def asset(path):

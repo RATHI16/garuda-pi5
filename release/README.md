@@ -1,5 +1,8 @@
 # GARUDA testing release: install, check, launch
 
+> The [16 November source preview](../docs/RELEASE_2026-11-16.md) adds camera/stereo and flight-lab features. These older installer binaries have not been rebuilt or freshly validated for that preview. See the [feature guide](../docs/WHATS_NEW_2026-11.md) for the new behavior.
+
+
 This is **v0.2.0-test.1**, an early testing distribution. It packages the current
 source, a Linux x86_64 installer executable, dependency/model manifests, launch
 script, checksums, license notices and a small generated replay clip. It is an

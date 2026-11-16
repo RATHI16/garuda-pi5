@@ -131,21 +131,26 @@ def reset_simulation():
         MESSAGE='Simulation reset. Select your target again after telemetry connects.'
     finally: LOCK.release()
 
-def start():
+def start(camera_page=False):
     global MESSAGE
     if os.environ.get('GARUDA_SIM') != '1': raise ValueError('Restart launcher with GARUDA_SIM=1')
     if not LOCK.acquire(blocking=False): return
     try:
         c = config(); absent = missing(c)
         if absent: raise ValueError('Setup required: '+', '.join(absent))
+        if any(any(str(v).endswith('/fc_bridge.py') or str(v)=='fc_bridge.py' for v in a[:3]) for a in processes()):
+            raise ValueError('The FC bridge is running. End that session before starting the PX4 controller.')
         live = components()
         if live['sitl'] and not live.get('gazebo'):
             raise ValueError('Gazebo closed but PX4 is still running. Use Reset simulation to start a fresh flight.')
         if not live['sitl']:
             if any(Path(a[0]).name=='px4' and '-i' in a and a[a.index('-i')+1]=='3' for a in processes()):
                 raise ValueError('PX4 instance 3 already exists outside the launcher; use Reset simulation to recover this lab')
-            stop_managed('dashboard');stop_managed('agent')
+            # Vision retains simulator timestamps; a new world must not inherit them.
+            stop_managed('dashboard');stop_managed('agent');stop_managed('vision')
         env = dict(os.environ, GARUDA_SIM='1', GARUDA_PI_URL=c['pi_url'], GARUDA_DATA_ROOT=c.get('data_root',''))
+        if camera_page:
+            env.update(GARUDA_ACCEPT_PREVIEW_STEREO='1', GARUDA_ACCEPT_MONO_ESTIMATE='1', GARUDA_ACCEPT_LIVE_ONBOARD='1', GARUDA_LAB_ALLOW_ORIGIN=c['pi_url'])
         completed = subprocess.run([sys.executable, 'hosts/pc/lab_processes.py', 'start'], cwd=ROOT, env=env, capture_output=True, text=True, timeout=20)
         if completed.returncode: raise ValueError(completed.stderr or completed.stdout)
         if not live['qgc']:
@@ -160,11 +165,27 @@ class HTTP(BaseHTTPRequestHandler):
     def reply(self, code, data, kind='application/json'):
         if not isinstance(data, bytes): data = json.dumps(data).encode()
         self.send_response(code); self.send_header('Content-Type', kind)
+        if self.camera_origin():
+            self.send_header('Access-Control-Allow-Origin', self.headers['Origin'])
+            self.send_header('Vary', 'Origin')
         self.send_header('Content-Length', str(len(data))); self.end_headers(); self.wfile.write(data)
+    def camera_origin(self):
+        return self.headers.get('Origin') == config().get('pi_url') and self.path in ('/api/lab/start', '/api/lab')
+    def do_OPTIONS(self):
+        host = self.headers.get('Host', '')
+        if host not in (f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}') or not self.camera_origin():
+            return self.reply(403, {'error': 'Origin not allowed'})
+        self.send_response(204)
+        self.send_header('Access-Control-Allow-Origin', self.headers['Origin'])
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Access-Control-Allow-Private-Network', 'true')
+        self.send_header('Vary', 'Origin')
+        self.end_headers()
     def trusted(self):
         host = self.headers.get('Host', '')
         origin = self.headers.get('Origin')
-        return host in (f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}') and (not origin or origin == 'http://'+host)
+        return host in (f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}') and (not origin or origin == 'http://'+host or self.camera_origin())
     def do_GET(self):
         if not self.trusted(): return self.reply(403, {'error':'Local requests only'})
         if self.path=='/': return self.reply(200, (ROOT/'hosts/pc/demo.html').read_bytes(), 'text/html; charset=utf-8')
@@ -184,7 +205,7 @@ class HTTP(BaseHTTPRequestHandler):
                 tmp=CONFIG.with_suffix('.tmp');tmp.write_text(json.dumps(c,indent=2));tmp.replace(CONFIG)
                 MESSAGE='Settings saved. Running processes keep their settings until their next start.'
             elif self.path.endswith('/reset'): reset_simulation()
-            else: start()
+            else: start(camera_page=self.camera_origin())
             self.reply(200,{'message':MESSAGE})
         except (ValueError,OSError,subprocess.TimeoutExpired) as exc:
             MESSAGE=str(exc);self.reply(400,{'error':MESSAGE})

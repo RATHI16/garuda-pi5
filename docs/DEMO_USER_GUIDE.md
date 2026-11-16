@@ -4,11 +4,6 @@ Updated 2026-11-01. Covers the Hailo-10H Pi camera demo and the separate PC ROS 
 
 **Publication status:** published to the public `bhanuprakashjh/garuda-pi5` `main` on 2026-11-01 together with the Pi demo and PC flight-lab sources (Pi baseline `99db1c5`, lab through `1d28872`); the repository's original October 24 snapshot remains in its history. The remaining release gates (fresh-machine installation, full-orbit and cooled-soak validation) are listed in the [repository update plan](GARUDA_PI5_UPDATE_PLAN.md) and are still open.
 
-For the automated testing installer and downloadable executable/source kit, see
-[release setup](../release/README.md). Its pinned model manifest supersedes broad
-model fetching: it verifies exact baseline bytes, including the known-good pose
-artifact served under a v5.4.0 URL. The manual steps below remain useful for diagnosis.
-
 The existing bench works. A complete installation on a second, clean PC/Pi has **not** been validated. In particular, the Pi requires compatible compiled models and Hailo packages; those are not all supplied by a single installer. This guide identifies those dependencies rather than silently substituting incompatible downloads.
 
 ## 1. Choose what to run
@@ -410,8 +405,52 @@ Before a show, validate direct Pi fallback, both views, selection and loss/retur
 Developer tests use pytest (install it in a separate developer environment if absent):
 
 ```bash
-PYTHONPATH=hosts/pc python3 -m pytest services/garuda-follow/tests hosts/pc/test_lab_launcher.py -q
+python3 -m pytest services/garuda-follow/tests hosts/pc/test_lab_launcher.py -q
 .runtime/vision-env/bin/python -m pytest hosts/pc/test_vision.py -q
 ```
 
 The vision environment may need pytest installed explicitly for development; it is not a runtime requirement. Simulator smoke harnesses `bench/sitl_smoke.py` and `bench/visual_sitl_smoke.py` **arm and move SITL**. Run them only in a dedicated disarmed simulation session without concurrent UI commands, with `GARUDA_SIM=1`. Consult [bench evidence](../bench/benchlog.md) before claiming a test passed.
+
+### Repeatable moving-person bench scenes
+
+The owner-service branch includes `start_sitl.py --visual --bench-scene walk-turn`
+and `--bench-scene screen-crossing`. Both need the existing bench truth plugin
+(`bash bench/sim_truth/build.sh`) and a fresh isolated simulator. They retain the
+0.3-radian camera pitch used by the instrumented Hailo tests. Configure the PC
+vision adapter with that same pitch and the bounded Pi Hailo RPC trial before
+running either scene. Keep the Gazebo GUI attached to `garuda_isolated` to watch.
+
+Run `bench/hailo_scene_smoke.py SCENE --actor /absolute/path/to/walk.dae` in the
+vision Python environment with `GARUDA_SIM=1 GZ_PARTITION=garuda_isolated`, after
+controller telemetry and QGC are ready. Start within the first 60 simulation
+seconds. Use a persistent supervisor for the recorder: the scene takes about
+three minutes, and a command-session timeout must not terminate it mid-flight.
+SIGTERM requests cleanup/landing and preserves a failed result. Verify landing
+and disarm separately if the recorder is interrupted or killed.
+
+The actor dwells until simulation second 120, walks from (6,0) to (9,0) by 140,
+and then to (9,3) by 160. The flight records through second 165 and lands. Gazebo
+interpolates between waypoints, so the actual path can slightly overshoot; the
+read-only actor pose is recorded for scoring. Animation is time-based. The
+600-second script loop is outside the accepted test interval.
+
+`walk-turn` checks airborne tracking, unchanged target identity, the existing
+speed/separation bounds, and end-gap convergence. `screen-crossing` adds a fixed
+screen and checks for explicit reselection after loss and horizontal clearance.
+These are slow, single-person cases, not crowd or obstacle-avoidance qualification.
+Ground truth is used for scoring, never to choose a target or steer the drone.
+Results and failed attempts use unique files in `.runtime/hailo-scene-*`.
+
+Other PX4 world definitions in this installation include forest, walls, windy,
+ridge, baylands, lawn and moving_platform. Those worlds do not automatically
+include this person, RGBD camera, or scoring instrumentation; integrating them is
+separate work, and some assets may need downloading.
+
+The `walls-follow` preset imports the installed PX4 `walls.sdf` geometry into a
+corridor and uses the shorter lateral route (9,1.5). Launch with
+`start_sitl.py --visual --bench-scene walls-follow --px4 /path/to/PX4-Autopilot`;
+pass `--walls-world /path/to/PX4-Autopilot/Tools/simulation/gz/worlds/walls.sdf`
+to `bench/hailo_scene_smoke.py walls-follow`, along with `--actor`. Changed wall
+dimensions/poses are refused because the clearance scorer assumes this exact map.
+Depth values and horizontal person separation are reported separately; this preset
+is a simulated distance/follow check, not physical-camera accuracy validation.

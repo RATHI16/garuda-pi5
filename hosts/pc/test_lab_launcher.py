@@ -8,9 +8,45 @@ import lab_launcher as lab
 
 class LauncherTests(unittest.TestCase):
     def setUp(self):
+        self.process_patch=patch.object(lab,'processes',return_value=[])
+        self.process_patch.start();self.addCleanup(self.process_patch.stop)
         self.stop_patch=patch.object(lab,'stop_managed')
         self.stopped=self.stop_patch.start()
         self.addCleanup(self.stop_patch.stop)
+
+    def test_camera_start_refuses_existing_bridge(self):
+        with patch.dict(lab.os.environ, {'GARUDA_SIM':'1'}), patch.object(lab,'config',return_value={}), patch.object(lab,'missing',return_value=[]), patch.object(lab,'processes',return_value=[['python3','/repo/services/garuda-follow/fc_bridge.py','--simulator']]), patch.object(lab.subprocess,'run') as run:
+            with self.assertRaisesRegex(ValueError,'FC bridge is running'): lab.start(camera_page=True)
+            run.assert_not_called()
+
+    def test_camera_start_enables_only_simulator_sources_and_exact_origin(self):
+        with patch.dict(lab.os.environ,{'GARUDA_SIM':'1'}), patch.object(lab,'config',return_value={'pi_url':'http://pi:8098'}), patch.object(lab,'missing',return_value=[]), patch.object(lab,'components',return_value={'sitl':True,'qgc':True,'gazebo':True}), patch.object(lab.subprocess,'run') as run:
+            run.return_value.returncode=0
+            lab.start(camera_page=True)
+            env=run.call_args.kwargs['env']
+            self.assertEqual(env['GARUDA_LAB_ALLOW_ORIGIN'],'http://pi:8098')
+            self.assertEqual(env['GARUDA_ACCEPT_LIVE_ONBOARD'],'1')
+            self.assertEqual(env['GARUDA_SIM'],'1')
+
+    def test_camera_origin_can_start_but_cannot_reconfigure_or_reset(self):
+        import threading, urllib.request, urllib.error
+        server=lab.ThreadingHTTPServer(('127.0.0.1',0),lab.HTTP)
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            base=f'http://127.0.0.1:{server.server_port}'
+            with patch.object(lab,'config',return_value={'pi_url':'http://pi:8098'}), patch.object(lab,'start') as start:
+                headers={'Content-Type':'application/json','Origin':'http://pi:8098'}
+                req=urllib.request.Request(base+'/api/lab/start',data=b'{}',headers=headers)
+                with urllib.request.urlopen(req) as r:self.assertEqual(r.headers['Access-Control-Allow-Origin'],'http://pi:8098')
+                start.assert_called_once_with(camera_page=True)
+                for route in ('/api/lab/config','/api/lab/reset','/api/command'):
+                    with self.assertRaises(urllib.error.HTTPError) as e:urllib.request.urlopen(urllib.request.Request(base+route,data=b'{}',headers=headers))
+                    self.assertEqual(e.exception.code,403)
+                with self.assertRaises(urllib.error.HTTPError) as e:urllib.request.urlopen(urllib.request.Request(base+'/api/lab/start',data=b'{}',headers={**headers,'Origin':'http://untrusted'}))
+                self.assertEqual(e.exception.code,403)
+                req=urllib.request.Request(base+'/api/lab/start',method='OPTIONS',headers=headers)
+                with urllib.request.urlopen(req) as r:self.assertEqual(r.status,204)
+        finally:server.shutdown();server.server_close();thread.join()
 
     def test_config_rejects_non_http_and_extra_fields(self):
         for url in ('file:///etc/passwd','http://host/path','http://user:pass@host','https://host'):
@@ -66,11 +102,11 @@ class LauncherTests(unittest.TestCase):
         finally: server.shutdown();server.server_close();thread.join()
 
 
-    def test_new_sitl_clears_cached_controller_and_agent(self):
+    def test_new_sitl_clears_controller_agent_and_old_camera_timestamps(self):
         c=dict(pi_url='http://pi',px4='/px4',actor='/actor/walk.dae')
         with patch.dict(lab.os.environ,{'GARUDA_SIM':'1'}),patch.object(lab,'config',return_value=c),patch.object(lab,'missing',return_value=[]),patch.object(lab,'components',return_value={'sitl':False,'qgc':True,'gazebo':False}),patch.object(lab,'processes',return_value=[]),patch.object(lab,'launch'),patch.object(lab.subprocess,'run') as run:
             run.return_value.returncode=0;lab.start()
-            self.assertEqual([c.args[0] for c in self.stopped.call_args_list],['dashboard','agent'])
+            self.assertEqual([c.args[0] for c in self.stopped.call_args_list],['dashboard','agent','vision'])
 
     def test_missing_world_does_not_reuse_old_flight(self):
         with patch.dict(lab.os.environ,{'GARUDA_SIM':'1'}),patch.object(lab,'config',return_value={'pi_url':'http://pi'}),patch.object(lab,'missing',return_value=[]),patch.object(lab,'components',return_value={'sitl':True,'qgc':True,'gazebo':False}),patch.object(lab,'launch') as launch,patch.object(lab.subprocess,'run') as run:
