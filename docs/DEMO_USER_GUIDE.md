@@ -1,8 +1,6 @@
 # Microchip / GARUDA demo: installation and operator guide
 
-Updated 2026-11-01. Covers the Hailo-10H Pi camera demo and the separate PC ROS 2 / PX4 / Gazebo flight lab through commit `1d28872`. Start here for the current demo; older bench instructions describe earlier experiments.
-
-**Publication status:** published to the public `bhanuprakashjh/garuda-pi5` `main` on 2026-11-01 together with the Pi demo and PC flight-lab sources (Pi baseline `99db1c5`, lab through `1d28872`); the repository's original October 24 snapshot remains in its history. The remaining release gates (fresh-machine installation, full-orbit and cooled-soak validation) are listed in the [repository update plan](GARUDA_PI5_UPDATE_PLAN.md) and are still open.
+For the 18 November preview, start with the [tester guide](TESTING_2026-11-18.md). Use the sections below when you need to install the Pi software, models, PX4 or Gazebo. They describe the established workstation setup. The [current release record](RELEASE_2026-11-18.md) identifies which paths were exercised on this revision.
 
 The existing bench works. A complete installation on a second, clean PC/Pi has **not** been validated. In particular, the Pi requires compatible compiled models and Hailo packages; those are not all supplied by a single installer. This guide identifies those dependencies rather than silently substituting incompatible downloads.
 
@@ -268,6 +266,10 @@ sudo apt-get install gstreamer1.0-plugins-bad gstreamer1.0-libav gstreamer1.0-gl
 ```
 
 Download the x86_64 AppImage from the [official QGC installation page](https://docs.qgroundcontrol.com/Stable_V5.0/en/qgc-user-guide/getting_started/download_and_install.html), place it in your Applications directory and make that file executable with `chmod +x`. Record its release and checksum. This lab uses UDP, so serial-port group changes and removing ModemManager are not required for its simulator connection. QGC supplies the heartbeat needed by the current SITL arming configuration. The launcher uses separate QGC settings under `.runtime`.
+
+With OAK stereo enabled, choose **Depth map → Expand depth** to inspect the colour image and optical depth from the same frame. **Close** or **Esc** returns to the RGB view and turns off the depth inset. Black means no depth sample. Blue-grey marks a sample beyond the 6 m colour scale. A white outline and torso reading appear only when the region belongs to that pair and the distance is available; a rejected region can still have an outline. The 3D view starts at Fine detail. **Raw grid points** switches to the original fixed-pixel sampling for comparison.
+
+In the camera page, open **Advanced tuning & diagnostics** and choose **Read QGC link history**. The laptop reads the active simulator QGC recording and shows the last receipt time for each PX4 mission-computer loss and recovery event, in the browser’s local time. Refresh the history with the same button. The separate heartbeat count comes from the laptop sender. An empty recording leaves the receiver state unknown.
 
 ## 5. Configure and launch
 

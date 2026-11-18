@@ -1,9 +1,13 @@
 # OAK calibration workspace
 
+For the current release use the [board and tape field guide](../hosts/pi5/demo/chennai/OPERATOR.md) and [four printable targets](../hosts/pi5/demo/chennai/oak-targets-a4.pdf).
+
 Open **Calibration** in the demo header or `http://<Pi-IP>:8099/`. This is a separate
 bench service, so neither Hailo inference nor the camera owner is replaced. It reads the
 owner's loopback endpoints. No new Pi packages, camera flash writes or factory calibration
 changes. Existing OpenCV 4.10.0 and NumPy are used. OpenCV is Apache-2.0; no new dependency.
+
+The shipping profile uses Pi host stereo with on-demand maps. For the current Chennai release, start with the [operator field guide](../hosts/pi5/demo/chennai/OPERATOR.md), [engineering handoff](../hosts/pi5/demo/chennai/CLAUDE_HANDOFF.md) and [printable targets](../hosts/pi5/demo/chennai/oak-targets-a4.pdf). These are also available in the calibration centre. The on-camera stereo installation described in the dated section below is historical.
 
 ## Team workflow
 

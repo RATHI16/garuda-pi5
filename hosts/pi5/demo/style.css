@@ -3,3 +3,18 @@
 /* Operator setup stays next to the live view; diagnostics are secondary. */
 .flightSetup{padding:18px 22px;margin:18px 0;background:#18232e;border:1px solid #3c5364;border-radius:12px}
 .setupChoices{display:flex;gap:20px;align-items:end;flex-wrap:wrap}.setupChoices label{display:flex;flex-direction:column;gap:8px;font-size:13px;color:#b5cbd9}.setupChoices strong{font-size:15px;color:#fff;padding:10px 0}.setupChoices select{background:#0d1720;color:#fff;border:1px solid #587386;border-radius:6px;padding:10px;font:inherit}.flightSetup p{font-size:15px;line-height:1.5;margin:14px 0 0;color:#e0eaf0}.flightCommands{flex-wrap:wrap}.operator .flightcontrols{margin:16px 0}.operator .gestureReadout{margin:16px 0}.flightSetup button{min-height:40px}
+
+#depthInspector{width:min(1180px,94vw);max-height:92vh;overflow:auto;box-sizing:border-box;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:12px;padding:20px}
+#depthInspector::backdrop{background:#060a10d9}
+.depthHeading,.depthLegend{display:flex;align-items:center;justify-content:space-between;gap:16px}
+.depthHeading h2{font-size:1.25rem;margin:0}
+.depthPair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:16px 0}
+.depthPair figure{margin:0}.depthPair figcaption{margin-bottom:6px}.depthPair small{color:var(--amber);margin-left:8px}
+.depthPair canvas{display:block;width:100%;height:auto;background:#000}
+.depthLegend{justify-content:flex-start;flex-wrap:wrap;color:var(--muted);font-size:.85rem}
+.depthScale{display:flex;justify-content:space-between;flex-wrap:wrap;width:min(300px,100%)}
+.depthScale div{width:100%;height:8px;margin-bottom:4px;background:linear-gradient(to right,red,yellow,lime,cyan,blue)}
+.depthFar:before,.depthMissing:before{content:'';display:inline-block;margin-right:5px;width:12px;height:12px;vertical-align:middle;border:1px solid #708095}
+.depthFar:before{background:rgb(48,48,96)}.depthMissing:before{background:black}
+#inspectReading{font-weight:600;margin:14px 0 4px}#inspectFrame{color:var(--muted);margin:0;font-variant-numeric:tabular-nums}
+@media(max-width:680px){.depthPair{grid-template-columns:1fr}#depthInspector{padding:12px}}

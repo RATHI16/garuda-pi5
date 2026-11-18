@@ -1,10 +1,6 @@
 # Camera on the vehicle: bring-up plan for the teams
 
-Status 2026-11-15: code written and unit-tested on a PC; **not yet run on a Pi, a CM3, an
-airframe or in Gazebo**. Every number a team measures goes into `bench/benchlog.md` with a
-`bench/versions.md` snapshot; this document contains none.
-
-This plan authorises nothing with propellers on. Stage 5 is a separate owner decision.
+The owner reports that the team demonstrated Ethernet communication, Offboard entry and motor spin on a physical FC with propellers removed. This release supports mounted-camera checks and physical FC telemetry observation. The physical bridge currently permits receive-only operation. See the [engineering handoff](../hosts/pi5/demo/chennai/CLAUDE_HANDOFF.md#6-return-two-independent-records) for the evidence to return.
 
 ## 1. Three setups, one code base
 
@@ -12,7 +8,7 @@ This plan authorises nothing with propellers on. Stage 5 is a separate owner dec
 |---|---|---|---|---|
 | Owner bench | OAK-D Pro | fixed | simulated (browser, or PX4 SITL lab) | stereo distance, follow in simulation |
 | US team, CES static | CM3 | fixed or vehicle (on a stand) | none, nothing flies | tracking, and either the browser simulation or the command panel |
-| Chennai team | CM3 first, OAK later | vehicle | real airframe, staged below | shadow command, later offboard with props off |
+| Chennai team | CM3 first, OAK later | vehicle | real airframe, staged below | grounded camera measurements and receive-only FC telemetry |
 
 The camera profile is chosen when the service starts (`docs/UNIFIED_CAMERA_PROFILES.md`).
 One camera per Pi at a time.
@@ -111,37 +107,7 @@ nothing is sent. Check that the existing offboard bridge and this stack do not b
 link, and that timestamps make sense.
 *Exit:* 30 minutes with no link errors and no effect on the flight controller.
 
-**Stage 4 — props off, offboard, airframe restrained.** The team's bridge forwards the
-shadow command. Before the first run, list every flight-controller parameter that will be
-set and have it agreed (CLAUDE.md rule 12). The bridge must:
-- check every field itself (finite, within its own limits, `valid` true, frame age, frame
-  sequence advancing, same `instance`), and enter a defined perception-Hold when anything fails or when
-  `onboard` is missing; reject future/negative ages, repeated or reversed sequences, changed
-  epoch/process/target, nonzero vertical velocity and commands exceeding independent limits;
-- never treat "the Pi still answers" as "the command is good";
-- leave altitude and all failsafes to the flight controller.
-
-Separate the expected outcomes **before** the run:
-- Invalid perception while bridge/FC telemetry is healthy: a defined perception-Hold, with
-  zero yaw as well as translation. Continuing an offboard heartbeat does not trigger PX4's
-  offboard-loss failsafe. Record commanded setpoints and the actual resulting mode.
-- Lost bridge/link, lost FC telemetry or expired command watchdog: stop/rescind the offboard
-  stream according to the reviewed bridge policy; verify the configured FC loss action.
-- Physical RC takeover must work regardless of the Pi's intent. One authorised setpoint
-  publisher only; do not let this rehearsal and the team's existing bridge compete.
-
-Test cable loss, killed detector, covered camera, frozen but responding producer, Pi/bridge
-restart, changed target identity, invalid numeric fields and operator deselection. Restore
-input after each fault: it must not silently re-arm or resume. Clock offsets must be bounded;
-never compare unsynchronised host monotonic timestamps directly. Log receive age and
-sequence progress separately. A stopped vehicle on a bench cannot prove an airborne Hold.
-
-*Exit:* FC logs match the recorded commands, every fault matches its prewritten expected
-mode/timeout, RC takeover and restart/reselection pass, and a reviewer checks the evidence.
-This document is a test plan, not permission to activate the physical bridge.
-
-**Stage 5 — anything with props on.** Not part of this plan. Needs the owner's explicit
-authorisation, a tether or net, measured distance (OAK) and an agreed test card.
+**End of the physical test path for this release.** Return the camera measurements and the receive-only FC record for independent review. An absent or stale FC report should show unknown. Retain the FC-side log alongside the observer log and record how the clocks were compared. Command-loss behavior, pilot takeover and orbit in the air still require separate vehicle-specific qualification.
 
 ## 5. CES static demo (CM3, nothing flies)
 
@@ -154,13 +120,6 @@ authorisation, a tether or net, measured distance (OAK) and an agreed test card.
 - Rehearse for the length of a show day: temperature, restart after power loss, a crowd in
   view (many people, one selected).
 
-## 6. Not done yet
+## 6. Interpreting the result
 
-- This code has not run on a CM3, on any airframe, or closed-loop in Gazebo.
-- The follow-gap slider on the page does not change the Pi's wanted gap (2.5 m).
-- No camera-tilt or attitude compensation: the command assumes a level, forward-looking camera.
-- A MAVLink/UDP bridge now exists in this repository (`FC_BRIDGE.md`): written and unit-tested,
-  never yet sent a setpoint. Stage 4 applies to it exactly as to the team's own bridge; run only one.
-- The team's own physical bridge is the team's. The repository's separate PX4 SITL transport
-  is simulation-gated; see `ONBOARD_SIM_REHEARSAL.md`. It is not a real-FC bridge.
-- Team release/import plan: `TEAM_RELEASE_PLAN.md`; nothing is published by this document.
+A passing mounted-camera check covers that camera, mount and test conditions. The physical bridge in this tag is receive-only. The combined camera/aircraft system has no airborne acceptance for height hold, target loss or orbit. Use the [simulator test](TESTING_2026-11-18.md#5-rehearse-the-gui-in-gazebo) for operator controls and the [release record](RELEASE_2026-11-18.md) for the measured scope.

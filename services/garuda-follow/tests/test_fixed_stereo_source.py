@@ -262,3 +262,11 @@ def test_moving_camera_is_refused_even_with_preview_accepted():
         s['stats']['capabilities']={'mount':'vehicle'}
         assert step(c,s,.1)[:2]==(0.,0.)
         assert c.target is None and 'fixed-camera mapping refused' in c.reason
+
+@pytest.mark.parametrize('state', ['ambiguous', 'expired', 'no_reference'])
+def test_terminal_camera_hold_explains_reselection(state):
+    c = flying()
+    c.reacquire = True
+    v = step(c, with_identity(moving(2, 7, 7), target=7, confirmed=False, state=state), .1)
+    assert v[:2] == (0., 0.) and c.target is None
+    assert 'select again' in c.reason

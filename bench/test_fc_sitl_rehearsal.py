@@ -109,7 +109,7 @@ def test_runner_explicit_hold_follow_and_silence_are_distinct(monkeypatch):
     class GateBridge:
         def __init__(self,*a,**kw):self.gate=FcGate();self.receive_only=False
         def tick(self,s,a,p):
-            out=self.gate.step(s,a,p,dict(offboard=True,armed=False))
+            out=self.gate.step(s,a,p,dict(offboard=True,armed=True))
             if out['stream']:
                 wire.packets.append(clock[0]);wire.setpoints.append((clock[0],dict(forward=out['forward_vel'],yaw=out['yaw_rate'])))
             return out

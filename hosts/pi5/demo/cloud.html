@@ -13,9 +13,11 @@ html,body{margin:0;height:100%;background:#05080e;color:#edf3fa;font-family:Inte
 <body>
 <div id="bar"><b>STEREO 3D VIEW</b><span class="pill">ONE VIEWPOINT · UNVALIDATED</span>
 <button id="front">Front</button><button id="top">Top</button><button id="side">Side</button><button id="pause">Pause</button>
-<label>Detail <select id="detail"><option value="8">Coarse</option><option value="4">Fine</option><option value="2" selected>Full</option></select></label>
+<label>Detail <select id="detail"><option value="8">Coarse</option><option value="4" selected>Fine</option><option value="2">Full</option></select></label>
+<label><input type="checkbox" id="raw"> Raw grid points</label>
+<label><input type="checkbox" id="guides" checked> Guides</label>
 <span id="status">Connecting…</span></div>
 <canvas id="cloud"></canvas>
-<div id="help">Drag to rotate · scroll to zoom · double-click to reset. Built from a single stereo frame: surfaces facing away from the camera, and anything hidden behind an object, are missing. Distances are not validated against a tape measure.</div>
-<script src="/demo/controller.js"></script><script src="/demo/cloud.js"></script>
+<div id="help">RGB camera axes · +X right, +Y down, +Z forward. The 1 m grid overlays the scene at lens height. Drag to orbit · scroll to zoom · double-click to recenter.</div>
+<script src="/demo/depth-view.js"></script><script src="/demo/controller.js"></script><script src="/demo/cloud.js"></script>
 </body></html>

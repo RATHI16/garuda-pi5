@@ -52,6 +52,7 @@ class FcLink:
         self.sysid, self.host = sysid, host
         self.address = None
         self.seen = None            # (monotonic s, offboard, armed)
+        self.authority_loss = None  # falling edges observed during the current receive batch
         self.conflict = None
         self.attitude = None        # (monotonic s of the last ADVANCING message, its time_boot_ms)
         self.max_gap = 0.0          # longest gap between advancing attitude messages, for bring-up
@@ -78,8 +79,13 @@ class FcLink:
             self.conflict = now
             return
         self.address = address
-        self.seen = (now, (msg["custom_mode"] >> 16) & 0xFF == PX4_MAIN_MODE_OFFBOARD,
-                     bool(msg["base_mode"] & MAV_MODE_FLAG_SAFETY_ARMED))
+        offboard = (msg["custom_mode"] >> 16) & 0xFF == PX4_MAIN_MODE_OFFBOARD
+        armed = bool(msg["base_mode"] & MAV_MODE_FLAG_SAFETY_ARMED)
+        if self.seen and self.seen[2] and not armed:
+            self.authority_loss = "flight controller disarmed"
+        elif self.seen and self.seen[1] and not offboard:
+            self.authority_loss = "flight controller left offboard mode"
+        self.seen = (now, offboard, armed)
 
     def problem(self, now):
         """None when the flight controller is known and alive, else why not."""
@@ -170,8 +176,8 @@ class FcGate:
             return self._out()
         # FC boundaries are independent of camera availability. Missing perception may
         # pause a grant, but must never conceal the pilot leaving Offboard.
-        if self.grant is not None and not fc["offboard"]:
-            self.drop("flight controller left offboard mode")
+        if self.grant is not None and not (fc["armed"] and fc["offboard"]):
+            self.end_session("flight controller disarmed" if not fc["armed"] else "flight controller left offboard mode")
             return self._out()
         # Check the deadline on recovery too, not only on another invalid frame.
         if self.paused is not None and (not isinstance(now, (int, float)) or
@@ -246,6 +252,9 @@ class FcGate:
             self.drop("zero stream only" + ("" if fc["offboard"] else "; flight controller is not in offboard"), again=False)
             return self._out()
         if new:
+            if not fc["armed"]:
+                self.drop("flight controller is disarmed; follow request expired", again=False)
+                return self._out()
             if not fc["offboard"]:
                 self.drop("flight controller is not in offboard mode: switch it to offboard first, then press Flight controller: follow again", again=False)
                 return self._out()
@@ -274,5 +283,5 @@ class FcGate:
             return self._out()
         self.pin, self.sequence = pin, command["frame_seq"]
         self.state = "sending"
-        self.reason = "armed" if fc["armed"] else "flight controller is disarmed: setpoints are sent but nothing moves"
+        self.reason = "armed"
         return self._out(float(command["forward_vel"]), float(command["yaw_rate"]))

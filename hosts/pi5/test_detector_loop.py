@@ -521,3 +521,35 @@ def test_a_command_computed_across_a_mount_or_selection_change_is_never_installe
     assert published(g, push(g, "W" + change, 12, dt=0.001))
     with g._lock:
         assert g._state.get("onboard") is None
+
+
+def test_depth_http_views_identify_the_displayed_pair_and_its_age(mono, monkeypatch):
+    from http.server import ThreadingHTTPServer
+    from urllib.request import urlopen
+    from oak_stereo_state import PairDepthStore
+    import cv2
+
+    store = PairDepthStore()
+    rgb = np.full((16, 32, 3), 120, np.uint8)
+    meta = dict(epoch="view", rgb=dict(seq=9, height=16, width=32,
+                                       capture_host_ns=time.monotonic_ns()-100_000_000))
+    store.put(types.SimpleNamespace(meta=meta, rgb=rgb.tobytes(), depth_mm=np.full((16, 32), 1234, np.uint16)))
+    monkeypatch.setitem(mono._oak, "store", store)
+    with ThreadingHTTPServer(("127.0.0.1", 0), mono.make_handler()) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            for route in ("/stereo_depth.jpg", "/stereo_depth.jpg?paired=1", "/stereo_cloud.bin"):
+                with urlopen(f"http://127.0.0.1:{server.server_port}{route}", timeout=2) as r:
+                    assert r.headers["X-Stereo-Pair"] == "view:9"
+                    assert int(r.headers["X-Depth-Age-Ms"]) >= 100
+                    body = r.read()
+                if route.endswith(".bin"):
+                    assert body.startswith(b"GCL1")
+                    assert int.from_bytes(body[8:10], "little") == 1234
+                else:
+                    frame = cv2.imdecode(np.frombuffer(body, np.uint8), cv2.IMREAD_COLOR)
+                    assert frame.shape[:2] == (8, 32 if "paired" in route else 16)
+        finally:
+            server.shutdown()
+            thread.join()

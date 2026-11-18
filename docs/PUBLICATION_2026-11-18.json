@@ -1,0 +1,19 @@
+{
+  "tag": "v2026.11.18-preview.1",
+  "kind": "public source preview",
+  "source_commit": "f1cd58f5034640eacba55d0ac5670ff412b375a2",
+  "public_parent": "a0118017ea312bb7d99d7eb43e569a5cbfce5b72",
+  "runtime_and_tests": "Changed runtime sources, scripts, tests and printable PDF match the source commit byte for byte.",
+  "docs": "Public tester workflow and GitHub checkout instructions. The engineering handout differs from the earlier private transfer kit.",
+  "tests": {
+    "python": 1293,
+    "javascript": 197,
+    "fresh_venv_quick_checks": 24
+  },
+  "target_pdf_sha256": "1df506d07091fc64ac812c88b6de00961b8bad142c4cd4c521cb568868c08581",
+  "excluded": [
+    "private Git history and transfer bundle",
+    "workstation records, operator images and logs",
+    "new model or installer binaries"
+  ]
+}

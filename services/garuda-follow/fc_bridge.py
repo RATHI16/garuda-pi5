@@ -13,10 +13,11 @@ session: the stream does not come back by itself. See fc_gate.py for when a comm
 
 It refuses to start without an explicit statement of what is at the other end:
   simulator          GARUDA_SIM=1        and --simulator   (loopback addresses only)
-  flight controller  GARUDA_FC_BRIDGE=1  and --real-flight-controller
+  flight controller  GARUDA_FC_BRIDGE=1  and --real-flight-controller --receive-only
 and, in both cases, the one flight controller it may talk to: --fc-host and --fc-sysid.
 """
 import argparse
+import ipaddress
 import json
 import math
 import os
@@ -39,7 +40,10 @@ MAX_RECEIVE_S = 0.02           # by count or by time, whichever comes first
 
 
 def _loopback(host):
-    return isinstance(host, str) and host.startswith("127.")
+    try:
+        return ipaddress.IPv4Address(host).is_loopback
+    except ipaddress.AddressValueError:
+        return False
 
 
 def endpoint_kind(args, env):
@@ -60,6 +64,8 @@ def endpoint_kind(args, env):
                          "so a real flight controller on the network can never be reached by it.")
     if real and _loopback(args.fc_host):
         raise SystemExit("REFUSED: a loopback --fc-host is a simulator; use GARUDA_SIM=1 --simulator.")
+    if real and not args.receive_only:
+        raise SystemExit("REFUSED: physical FC readiness checks are pending. Only --receive-only is available.")
     return "simulator" if sim else "flight controller"
 
 
@@ -68,6 +74,7 @@ class Bridge:
     def __init__(self, sock, sysid, host, receive_only=False, clock=time.monotonic, label=""):
         self.sock, self.receive_only, self.clock, self.label = sock, receive_only, clock, label
         self.link, self.gate = FcLink(sysid, host), FcGate()
+        self.simulator_endpoint = _loopback(host)
         self.seq, self.last_heartbeat, self.sent, self.last, self.last_tick = 0, -math.inf, 0, None, None
 
     def _send(self, packet, address):
@@ -88,24 +95,26 @@ class Bridge:
 
     def tick(self, snapshot, age_ms, progress_ms):
         started = self.clock()
-        if self.last_tick is not None and not 0 <= started - self.last_tick <= MAX_TICK_GAP_S:
-            # The loop (or the whole process) was paused. The stream session ends before
-            # anything is sent again; only new operator requests can restart stream and motion.
-            self.gate.end_session("bridge control loop stalled")
+        stalled = self.last_tick is not None and not 0 <= started - self.last_tick <= MAX_TICK_GAP_S
         self.last_tick = started
+        self.link.authority_loss = None
         self.receive(started)
         now = self.clock()                                   # fresh time for the freshness and send decisions
         spent = now - started
         if not 0 <= spent <= MAX_TICK_GAP_S:                 # this very tick took too long: the session does not survive it
-            self.gate.end_session("bridge control loop stalled")
+            stalled = True
             spent = max(spent, 0.0)
         # The camera state was aged by the caller at the start of the tick; time spent here
         # since then makes it older, and it is judged at the moment of sending.
         if isinstance(age_ms, (int, float)) and isinstance(progress_ms, (int, float)):
             age_ms, progress_ms = age_ms + spent * 1000, progress_ms + spent * 1000
         fc = self.link.view(now)
-        out = self.gate.step(snapshot, age_ms, progress_ms, fc, self.link.problem(now), now)
-        if self.receive_only:
+        # Several heartbeats can arrive in one read, including a disarm followed by a
+        # re-arm. Consume this tick's request even if the last heartbeat looks healthy.
+        authority_loss = "bridge control loop stalled" if stalled else self.link.authority_loss
+        out = self.gate.step(snapshot, age_ms, progress_ms, None if authority_loss else fc,
+                             authority_loss or self.link.problem(now), now)
+        if self.receive_only or not self.simulator_endpoint:
             self.gate.end_session("bridge is receive-only: nothing is sent")
             out = dict(self.gate._out(), state="refused" if out["generation"] is not None else "ready",
                        reason="bridge is receive-only: nothing is sent")

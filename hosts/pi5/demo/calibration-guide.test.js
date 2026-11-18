@@ -18,3 +18,8 @@ test('lens guide uses twelve tuning views',()=>{
  assert.equal(nextStep({goal:'lens'},Array.from({length:11},()=>good())).split,'tune');
  assert.equal(nextStep({goal:'lens'},Array.from({length:12},()=>good())).split,'validate');
 });
+test('a new measured session only advances for confirmed tape placements',()=>{
+ const config={goal:'depth',require_measured_tape:true};
+ assert.equal(nextStep(config,[good(),{...good(),tape_measured:false}]).tune,0);
+ assert.equal(nextStep(config,[{...good(),tape_measured:true}]).tune,1);
+});

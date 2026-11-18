@@ -1,11 +1,12 @@
 # What is new — November 2026
 
+New testers should begin with the [equipment-based test guide](TESTING_2026-11-18.md). It covers the depth inspector, printed targets, tape validation and updated PX4 readout.
+
 This is the guide for someone who has just downloaded the repository and wants to know what
 the camera demo can now do, how to use each feature, and how far each one has been tested.
 
 Read the status lines literally. "Tested in simulation" means PX4 SITL and Gazebo on a
-laptop. **Nothing in this release has flown a real aircraft, and nothing has been sent to a
-real flight controller.** Measured numbers live in `bench/benchlog.md`; this guide gives
+laptop. The owner reports Ethernet Offboard entry and props-off motor spin on a physical FC. This release's physical bridge is receive-only. GUI flight controls operate the simulator. Measured numbers live in `bench/benchlog.md`; this guide gives
 settings and limits, not performance claims.
 
 | # | Feature | Where it runs | Status |
@@ -254,69 +255,11 @@ state in `/api/state` → `transmit`.
 
 ## 11. MAVLink flight-controller bridge
 
-`services/garuda-follow/fc_bridge.py` forwards the Pi's follow command to a PX4 flight
-controller over MAVLink/UDP. It is a separate program, started by hand.
+`services/garuda-follow/fc_bridge.py` can forward simulator commands over loopback. Physical Ethernet endpoints accept telemetry observation only. It is a separate program, started by hand.
 
-**What it can and cannot send.** Its own heartbeat, and a body-frame velocity setpoint carrying
-forward speed and turn rate only. It contains no arm, disarm, mode-change or parameter message.
-The pilot arms, takes off and switches to offboard. No extra software is needed: the three
-MAVLink messages are written in plain Python and checked against pymavlink in the tests.
+For a first simulator test use the [GUI rehearsal](TESTING_2026-11-18.md#5-rehearse-the-gui-in-gazebo). The laptop lab controller handles the buttons. Leave the separate MAVLink bridge stopped during that test. The simulator bridge has its own [packet and refusal tests](FC_BRIDGE.md) and [bounded rehearsal record](FC_SITL_REHEARSAL.md).
 
-**Starting it.** It refuses to start unless told twice what is at the other end, and which
-one flight controller it may talk to:
-
-```
-# PX4 simulator on the same machine (loopback only)
-GARUDA_SIM=1 python3 services/garuda-follow/fc_bridge.py --simulator \
-    --listen 127.0.0.1:14543 --fc-host 127.0.0.1 --fc-sysid 4 --source http://<pi>:8098
-
-# a real flight controller: props off or restrained unless the flight is authorised
-GARUDA_FC_BRIDGE=1 python3 services/garuda-follow/fc_bridge.py --real-flight-controller \
-    --listen 0.0.0.0:14540 --fc-host <its address> --fc-sysid <its system id>
-```
-
-Add `--receive-only` to listen and report without ever sending.
-
-**Order of use.**
-1. Start the bridge. It sends nothing.
-2. On the page: placement On drone, select the person.
-3. Ask for **hold** (`fc_hold`). The bridge starts streaming "stay still".
-4. The pilot switches the flight controller to offboard.
-5. Ask for **follow** (`fc`). Only now can the vehicle move.
-
-**When it stops.**
-
-| Situation | What it does |
-|---|---|
-| The camera loses the person for a moment, or one frame arrives late | sends "stay still"; resumes by itself when the same person is confirmed again, for up to 5 seconds |
-| The person is gone for more than 5 seconds | follow ends; ask for hold, then follow again |
-| Another person, another camera run, a value outside its limits, placement changed | follow ends at once |
-| The pilot takes the vehicle out of offboard | follow ends at once |
-| The flight controller's fast telemetry stops for 0.3 s, or the bridge itself stalls | sends nothing at all, and stays silent until someone asks for hold again |
-
-Why it goes fully silent after losing the flight controller: in simulation, PX4 was seen to
-return to offboard by itself when a lost stream came back. The bridge must not be the thing
-that pulls it back.
-
-**Requirements on the flight controller's link.** It must send `ATTITUDE` at 10 Hz or faster.
-MAVLink signing is not supported.
-
-**Status.** Tested against the PX4 simulator only: correct packet form, correct turn and
-forward direction, six fault cases, and one live session in which a real person in front of
-the camera steered the simulated drone. Not run on a Pi as a service. Never connected to a
-real flight controller.
-
-**Before any real airframe, check these, seen in simulation:**
-- Commanding zero vertical speed did not hold height: the simulated drone sank after
-  hand-over to offboard.
-- What PX4 does when the stream stops, and whether the RC can take over, depend on that
-  flight controller's own configuration, which this program does not read or change.
-- Only one program may stream setpoints to a flight controller. Stop any other offboard
-  program first.
-
-**Read more.** `docs/FC_BRIDGE.md`, `docs/FC_SITL_REHEARSAL.md`. The rehearsal tools are
-`bench/fc_sitl_rehearsal.py` (scripted commands) and `bench/fc_live_ground.py` (real Pi path,
-ground only); both print their plan and send nothing unless run with `--execute`.
+On a physical Ethernet endpoint the published bridge only observes telemetry. The team previously demonstrated Ethernet connectivity, entry into Offboard and motor response with propellers removed. The sender revision for that test was not recorded here. This release has no airborne hardware acceptance.
 
 ## 12. Recording a carry-around
 
@@ -331,8 +274,7 @@ temperature. Numbers only, no pictures.
 
 `docs/ON_VEHICLE_BRINGUP.md` is the staged plan for a team mounting the Pi and camera on an
 airframe: same software everywhere, camera in the hand, carried on the airframe with the
-flight controller disconnected, flight controller connected receive-only, then offboard with
-props off and the airframe restrained. Anything with props on is outside the plan and needs
+flight controller disconnected, flight controller connected receive-only. Subsequent hardware command evaluation is a future stage. Anything with props on is outside the plan and needs
 the owner's explicit authorisation. `docs/TEAM_RELEASE_PLAN.md` describes how a release is
 handed to the sites.
 
@@ -346,7 +288,7 @@ handed to the sites.
 - Any closed-loop following with a real camera: a camera on a desk does not move with a
   simulated drone.
 - Height hold while the bridge is in control.
-- Everything involving a real flight controller or a real flight.
+- GUI flight initiation, tracking-loss response, pilot takeover and orbit on a physical aircraft.
 - Cooling: the bench Pi has a passive heatsink and has reached its temperature limit during
   long sessions.
 

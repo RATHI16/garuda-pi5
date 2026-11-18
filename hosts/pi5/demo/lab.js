@@ -10,6 +10,8 @@
 (function(){
   const LAB='http://127.0.0.1:8099',link=new Garuda.LabLink(),unlinker=new Garuda.Unlinker();
   let on=false,lab=null,labAt=-Infinity,note='';
+  let lastFlightRequest=null;
+  const flightNames={takeoff:'Take off',land:'Land',hold:'Hold',follow:'Follow',circle:'Circle'};
   // Set by an operator action in THIS page load (linking, or any command button). Without it the
   // page only watches: a reload or a lapsed lease never takes control of the lab by itself.
   let acted=false,mismatchHeld=false,connectRequested=false,modeChanging=false;
@@ -32,22 +34,28 @@
   const status=document.createElement('p');status.id='labStatus';
   document.querySelector('.flightCommands').append(button);document.querySelector('.flightCommands').after(status);
   const active=()=>on&&lab!==null&&performance.now()-labAt<1500;
-  const view=()=>Garuda.labView(on,active()?lab:null,session);
+  const view=()=>{
+    const now=performance.now();
+    const fresh=Number.isFinite(S?.age_ms)&&S.age_ms+now-F.received<700&&now-F.progress<800&&now-F.received<800;
+    return Garuda.labView(on,active()?lab:null,session,fresh?S:null);
+  };
   const mayAuto=()=>{const v=view();return !!v&&v.can.auto&&(v.control==='mine'||acted);};
-  function setOn(next){intent++;selecting=Promise.resolve(true);if(!next)heartbeat(false);touch(false);Object.assign(takeoff,{pending:false,settled:true,ids:new Set()});on=next;lab=null;labAt=-Infinity;note='';try{localStorage.setItem('garuda-lab-link',on?'1':'0');}catch(e){}V=view();vehicleChanged();}
+  function setOn(next){lastFlightRequest=null;intent++;selecting=Promise.resolve(true);if(!next)heartbeat(false);touch(false);Object.assign(takeoff,{pending:false,settled:true,ids:new Set()});on=next;lab=null;labAt=-Infinity;note='';try{localStorage.setItem('garuda-lab-link',on?'1':'0');}catch(e){}V=view();vehicleChanged();}
   async function send(payload){
     touch(true);
+    const request=flightNames[payload.command]?{name:flightNames[payload.command],status:'requested',id:null}:null;
+    if(request)lastFlightRequest=request;
     const isTakeoff=payload.command==='takeoff'||payload.command==='takeoff_follow';
     if(isTakeoff)Object.assign(takeoff,{pending:true,settled:false,ids:new Set()});
     const barrier=!isTakeoff&&takeoff.pending&&takeoff.settled;      // started after the take-off's request finished
     const done=id=>{if(isTakeoff){takeoff.settled=true;takeoff.settledAt=performance.now();}if((isTakeoff||barrier)&&takeoff.pending&&id)takeoff.ids.add(id);};
     try{const r=await fetch(LAB+'/api/command',{method:'POST',headers:{'Content-Type':'application/json','X-Garuda-Session':session},body:JSON.stringify(payload),signal:AbortSignal.timeout(2500)});
-      if(r.ok){note='';let id=null;try{id=(await r.json()).id??null;}catch(e){}done(typeof id==='string'?id:null);return {ok:true,id};}
-      let m='command rejected';try{m=(await r.json()).error||m;}catch(e){}note='PX4 lab: '+m;
+      if(r.ok){note='';let id=null;try{id=(await r.json()).id??null;}catch(e){}if(request)request.id=id;done(typeof id==='string'?id:null);return {ok:true,id};}
+      let m='command rejected';try{m=(await r.json()).error||m;}catch(e){}if(request)request.status='refused';note='PX4 lab: '+m;
       // A refusal by the lab's HTTP layer means the take-off was never queued.
       if(isTakeoff)Object.assign(takeoff,{pending:false,settled:true});
       return {ok:false,id:null};}
-    catch(e){done(null);note='PX4 lab did not answer · command not delivered';return {ok:false,id:null};}
+    catch(e){done(null);if(request)request.status='delivery unknown';note='PX4 lab did not answer · delivery unknown';return {ok:false,id:null};}
   }
   // While this tab holds the lab's control lease it says so once a second; if it stops (tab
   // closed, computer asleep) the lab holds by itself. Sent from a worker where there is one,
@@ -71,7 +79,9 @@
   window.labFrame=()=>{V=view();};
   async function poll(){
     if(on){
-      try{const r=await fetch(LAB+'/api/state',{signal:AbortSignal.timeout(1000)});const s=await r.json();if(s&&s.phase){lab=s;labAt=performance.now();touch(true);
+      try{const r=await fetch(LAB+'/api/state',{signal:AbortSignal.timeout(1000)});if(!r.ok)throw Error('Lab state unavailable');const s=await r.json();if(s&&s.phase){lab=s;labAt=performance.now();touch(true);
+        const ack=s.control?.last_command;
+        if(lastFlightRequest?.id&&ack?.id===lastFlightRequest.id&&ack.applied===false)lastFlightRequest.status='refused';
         if(takeoff.pending){const lc=s.control?.last_command;
           if(s.control?(!!lc&&takeoff.ids.has(lc.id)):(takeoff.settled&&labAt>takeoff.settledAt))takeoff.pending=false;}}}
       catch(e){if(performance.now()-labAt>1500)lab=null;}
@@ -98,7 +108,7 @@
     askUnlink();render();
   };
   window.garudaLab={
-    state:()=>({linked:on,pending:unlinker.pending,view:view(),lab:active()?lab:null}),
+    state:()=>({linked:on,pending:unlinker.pending,view:view(),lab:active()?lab:null,lastFlightRequest}),
     connect:()=>{if(!on){intent++;unlinker.note='';setOn(true);acted=true;connectRequested=true;render();}},
     disconnect:()=>{intent++;askUnlink();render();},
     setTestMode:async(mode)=>{

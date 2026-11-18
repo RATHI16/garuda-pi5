@@ -1,43 +1,89 @@
 'use strict';
-// Full-window 3-D view of the current stereo frame. One viewpoint; a picture, not a measurement.
-// Points are drawn as squares big enough to touch their neighbours: that closes the dot grid,
-// it does not recover surfaces the camera could not see.
-(function(){const $=id=>document.getElementById(id),cv=$('cloud'),g=cv.getContext('2d');
- const DEFAULT={yaw:0.3,pitch:-0.15,zoom:1.3};const view={...DEFAULT},gate=new Garuda.LiveGate(2500,3000),disp=new Garuda.LiveDisplay(gate);
- let img=null,pts=null,dirty=false,drag=null,ctl=null,last=0,shown='';
- function resize(){const dpr=Math.min(2,window.devicePixelRatio||1),s=Math.min(dpr,1920/Math.max(1,innerWidth));cv.width=Math.max(320,Math.round(innerWidth*s));cv.height=Math.max(180,Math.round(innerHeight*s));img=g.createImageData(cv.width,cv.height);invalidate();}
- function note(text){g.fillStyle='#ffbf69';g.font='16px sans-serif';g.fillText(text,20,70);}
- function draw(){dirty=false;if(!img)return;const n=Garuda.renderCloud(pts,img.data,cv.width,cv.height,view);g.putImageData(img,0,0);
-  if(!n)note(shown==='waiting'?'Waiting for a fresh stereo frame…':'No live stereo data');}
- function invalidate(){if(!dirty){dirty=true;requestAnimationFrame(draw);}}
- // Runs four times a second whatever the network is doing: decides what the page may claim.
- function watchdog(){const now=Date.now();if(ctl&&gate.timedOut(now)){ctl.abort();ctl=null;}
-  const w=disp.watch(now);if(w.clear&&pts){pts=null;invalidate();}        // never leave old geometry looking live
-  if(w.text!==$('status').textContent)$('status').textContent=w.text;
-  if(w.state!==shown){shown=w.state;invalidate();}
-  const every=$('detail').value==='2'?1000:500;
-  if(!disp.paused&&!document.hidden&&now-last>=every-20){last=now;tick();}}
- async function tick(){const now=Date.now(),token=gate.begin(now);if(token===null)return;
-  ctl=new AbortController();const mine=ctl;
-  try{const r=await fetch('/stereo_cloud.bin?step='+$('detail').value+'&t='+now,{cache:'no-store',signal:mine.signal});
-   if(!r.ok){disp.failure(token,r.status===404?'stereo is switched off on the camera':'no fresh stereo frame');return;}
-   const c=Garuda.decodeCloud(await r.arrayBuffer()),p=c?Garuda.cloudPoints(c):null;
-   if(!p){disp.failure(token,'unreadable data from the camera');return;}
-   // success() refuses late, cancelled, timed-out and paused replies: they never reach the screen
-   if(disp.success(token,Date.now(),p.n.toLocaleString()+' points · frame '+(r.headers.get('X-Stereo-Pair')||'').split(':').pop())){pts=p;invalidate();}}
-  catch(e){disp.failure(token,'');}
-  finally{if(ctl===mine)ctl=null;}}
- $('front').onclick=()=>{Object.assign(view,{yaw:0,pitch:0,zoom:1});invalidate();};
- $('top').onclick=()=>{Object.assign(view,{yaw:0,pitch:-1.35,zoom:1.6});invalidate();};
- $('side').onclick=()=>{Object.assign(view,{yaw:1.35,pitch:0,zoom:1.6});invalidate();};
- $('pause').onclick=()=>{if(disp.paused){disp.resume();if(ctl){ctl.abort();ctl=null;}last=0;}else disp.pause();
-  $('pause').textContent=disp.paused?'Resume':'Pause';watchdog();};
- $('detail').onchange=()=>{last=0;};
- document.addEventListener('visibilitychange',()=>{if(!document.hidden){last=0;watchdog();}});
- cv.onpointerdown=e=>{drag={x:e.clientX,y:e.clientY};cv.setPointerCapture(e.pointerId);cv.style.cursor='grabbing';};
- cv.onpointermove=e=>{if(!drag)return;view.yaw+=(e.clientX-drag.x)*0.006;view.pitch=Math.max(-1.5,Math.min(1.5,view.pitch+(e.clientY-drag.y)*0.006));drag={x:e.clientX,y:e.clientY};invalidate();};
- cv.onpointerup=cv.onpointercancel=()=>{drag=null;cv.style.cursor='grab';};
- cv.onwheel=e=>{e.preventDefault();view.zoom=Math.max(0.3,Math.min(5,view.zoom*(e.deltaY>0?1.1:0.9)));invalidate();};
- cv.ondblclick=()=>{Object.assign(view,DEFAULT);invalidate();};
- addEventListener('resize',resize);resize();watchdog();setInterval(watchdog,250);
+(function(){
+  const $=id=>document.getElementById(id),canvas=$('cloud'),g=canvas.getContext('2d');
+  const defaults={yaw:0.3,pitch:-0.18,zoom:1.8};
+  const view={...defaults,pivot:null,raw:false};
+  let image=null,points=null,epoch=null,dirty=false,drag=null,paused=false;
+
+  function guides(){
+    const projection=Garuda.cloudProjection(view,view.pivot,canvas.width,canvas.height);
+    function line(a,b,color,label){
+      const segment=projection.segment(a,b);
+      if(!segment)return;
+      const [p,q]=segment;
+      g.strokeStyle=color;g.beginPath();g.moveTo(...p);g.lineTo(...q);g.stroke();
+      if(label){g.fillStyle=color;g.fillText(label,q[0]+4,q[1]-4);}
+    }
+    g.save();g.font='bold 14px sans-serif';g.lineWidth=1;
+    for(let x=-2;x<=2;x++)line([x,0,0],[x,0,5],'rgba(170,195,210,.38)');
+    for(let z=0;z<=5;z++)line([-2,0,z],[2,0,z],'rgba(170,195,210,.38)');
+    const origin=[0,0,0];g.lineWidth=2;
+    line(origin,[1,0,0],'#ff9a85','+X');
+    line(origin,[0,1,0],'#9ae2af','+Y');
+    line(origin,[0,0,1],'#79caff','+Z');
+    const marker=projection.segment(origin,origin);
+    if(marker){
+      const [x,y]=marker[0];g.fillStyle='white';g.beginPath();g.arc(x,y,4,0,2*Math.PI);g.fill();
+      g.fillText('Camera',x+6,y+16);
+    }
+    g.restore();
+  }
+  function draw(){
+    dirty=false;
+    if(!image)return;
+    Garuda.renderCloud(points,image.data,canvas.width,canvas.height,view);
+    g.putImageData(image,0,0);
+    if(points?.n&&$('guides').checked)guides();
+  }
+  function invalidate(){if(!dirty){dirty=true;requestAnimationFrame(draw);}}
+  function resize(){
+    const scale=Math.min(window.devicePixelRatio||1,2,1920/Math.max(1,innerWidth));
+    canvas.width=Math.max(320,Math.round(innerWidth*scale));
+    canvas.height=Math.max(180,Math.round(innerHeight*scale));
+    image=g.createImageData(canvas.width,canvas.height);invalidate();
+  }
+  const viewer=new DepthViewer({
+    url:()=>'/stereo_cloud.bin?step='+$('detail').value+'&sampling='+($('raw').checked?'grid':'observed'),
+    period:()=>$('detail').value==='2'?1000:500,
+    async decode(response){
+      const cloud=Garuda.decodeCloud(await response.arrayBuffer());
+      if(!cloud)throw Error('Unreadable cloud');
+      const next=Garuda.cloudPoints(cloud);
+      const key=response.headers.get('X-Stereo-Pair');
+      const source=key.slice(0,key.lastIndexOf(':'));
+      return {draw(){
+        if(source!==epoch){view.pivot=null;epoch=source;}
+        points=next;
+        if(view.pivot===null)view.pivot=Garuda.cloudPivot(points);
+        draw();
+        return (cloud.offsets?'Observed cells':'Fixed grid')+' · '+points.n.toLocaleString()+' points';
+      }};
+    },
+    clear(){points=null;draw();},
+    status(text){$('status').textContent=text;}
+  });
+  function start(){if(!paused&&!document.hidden)viewer.start();}
+  for(const [id,yaw,pitch] of [['front',0,0],['top',0,-Math.PI/2],['side',Math.PI/2,0]]){
+    $(id).onclick=()=>{Object.assign(view,{yaw,pitch,zoom:1.8});invalidate();};
+  }
+  $('guides').onchange=invalidate;
+  $('pause').onclick=()=>{
+    paused=!paused;
+    if(paused)viewer.stop(true);else{viewer.stop();start();}
+    $('pause').textContent=paused?'Resume':'Pause';$('raw').disabled=$('detail').disabled=paused;
+  };
+  function samplingChanged(){viewer.stop();view.raw=$('raw').checked;start();}
+  $('raw').onchange=$('detail').onchange=samplingChanged;
+  document.addEventListener('visibilitychange',()=>{if(document.hidden&&!paused)viewer.stop();else start();});
+  canvas.onpointerdown=e=>{drag={x:e.clientX,y:e.clientY};canvas.setPointerCapture(e.pointerId);canvas.style.cursor='grabbing';};
+  canvas.onpointermove=e=>{
+    if(!drag)return;
+    view.yaw+=(e.clientX-drag.x)*0.006;
+    view.pitch=Math.max(-Math.PI/2,Math.min(Math.PI/2,view.pitch+(e.clientY-drag.y)*0.006));
+    drag={x:e.clientX,y:e.clientY};invalidate();
+  };
+  canvas.onpointerup=canvas.onpointercancel=()=>{drag=null;canvas.style.cursor='grab';};
+  canvas.onwheel=e=>{e.preventDefault();view.zoom=Math.max(.3,Math.min(5,view.zoom*(e.deltaY>0?1.1:.9)));invalidate();};
+  canvas.ondblclick=()=>{Object.assign(view,defaults,{pivot:Garuda.cloudPivot(points)});invalidate();};
+  addEventListener('resize',resize);resize();start();
 })();

@@ -516,3 +516,67 @@ test('real vehicle mode is refused even while grounded',async()=>{
  await assert.rejects(p.ctx.window.garudaLab.setTestMode('real'),/readiness/);
  assert.deepEqual(p.commands(),[]);
 });
+
+test('closing expanded depth releases the inset and rejects a response from before close',async()=>{
+  const app=fs.readFileSync(path.join(__dirname,'app.js'),'utf8');
+  const script=app.slice(app.indexOf('// Stereo depth map inset:'),app.indexOf('// The 3-D point cloud lives'));
+  const requests=[],timers=new Map();
+  let now=0,drawn=0;
+  const events={addEventListener(event,fn){this[event]=fn;}};
+  const elements={
+    depthButton:{hidden:false,classList:{toggle(){}},setAttribute(){},focus(){}},
+    depthPip:{hidden:true,width:640,height:360,getContext:()=>({drawImage(){drawn++;}})},
+    depthRate:{},inspectDepth:{...events,hidden:true},depthInspector:{...events,open:false}
+  };
+  const ctx=vm.createContext({$:id=>elements[id],document:{...events,hidden:false},
+    MutationObserver:class{observe(){}},performance:{now:()=>now},AbortController,setTimeout,clearTimeout,
+    setInterval(fn){timers.set(1,fn);return 1;},clearInterval(id){timers.delete(id);},
+    fetch:()=>new Promise(resolve=>requests.push(resolve)),
+    createImageBitmap:async()=>({close(){}})
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'depth-view.js'),'utf8'),ctx);
+  vm.runInContext(script,ctx);
+  const frame=seq=>({ok:true,headers:new Map([['X-Stereo-Pair','e:'+seq],['X-Depth-Age-Ms','0']]),blob:async()=>({})});
+  const {depthButton,depthPip,inspectDepth,depthInspector}=elements;
+  depthButton.onclick();requests[0](frame(1));await settle();
+  assert.equal(depthPip.hidden,false);
+  now+=500;timers.get(1)();
+  depthInspector.close();
+  assert.equal(timers.size,0);assert.equal(depthButton.textContent,'Depth map');
+  assert.equal(depthPip.hidden,true);assert.equal(inspectDepth.hidden,true);
+  depthButton.onclick();requests[1](frame(2));await settle();
+  assert.equal(depthPip.hidden,true);assert.equal(drawn,1);
+  requests[2](frame(3));await settle();
+  assert.equal(depthPip.hidden,false);assert.equal(drawn,2);
+  depthButton.onclick();assert.equal(timers.size,0);assert.equal(depthPip.hidden,true);
+});
+
+test('Land stays a request while PX4 reports flight, and telemetry loss clears the aircraft state',async()=>{
+  const {labFlightStatus}=require('./controller');
+  let lab=labState({phase:'FLYING',armed:true,landed:false,landed_fresh:true,nav_state:14,source_kind:'fixed_stereo',altitude:1.2});
+  const p=labPage(labReply(()=>lab),{'garuda-lab-link':'1'});
+  await p.poll();
+  p.els.land.onclick();
+  await settle();
+  const status=()=>{
+    const s=p.ctx.window.garudaLab.state();
+    return labFlightStatus(s.lab,s.view,s.lastFlightRequest);
+  };
+  assert.match(status(),/Land requested · PX4 reports Offboard, armed, in air · 1.2 m/);
+  lab={...lab,telemetry_fresh:false};
+  await p.poll();
+  assert.match(status(),/Land requested · Aircraft state unknown$/);
+  assert.equal(p.view().altitude,null);
+  assert.equal(p.view().mode,'UNKNOWN');
+  lab={...lab,phase:'GROUND',telemetry_fresh:true,landed:true,armed:false,altitude:0,nav_state:18};
+  await p.poll();
+  assert.match(status(),/PX4 reports Land, disarmed, on ground/);
+});
+
+test('a timed-out HTTP command has unknown delivery',async()=>{
+  const p=labPage((url,body)=>body?.command==='land'?new Error('timeout'):labReply(labState())(url,body),
+    {'garuda-lab-link':'1'});
+  await p.poll();
+  p.els.land.onclick();await settle();
+  assert.equal(p.ctx.window.garudaLab.state().lastFlightRequest.status,'delivery unknown');
+});

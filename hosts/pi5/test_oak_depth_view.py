@@ -157,3 +157,25 @@ def test_full_detail_payload():
     d = np.full((720, 1280), 2000, dtype=np.uint16)
     body = cloud_payload(d, np.zeros((360, 640, 3), dtype=np.uint8), step=2)
     assert len(body) == 8 + 640 * 360 * 5
+
+
+def test_observed_display_sampling_keeps_one_real_sample_even_at_partial_edges():
+    from oak_depth_view import observed_cells, observed_cloud_payload
+    import json
+    import struct
+
+    d = depth(h=3, w=5)
+    d[1, 1], d[1, 2], d[2, 4] = 1000, 3000, 900
+    rgb = np.arange(45, dtype=np.uint8).reshape(3, 5, 3)
+    chosen, offsets = observed_cells(d, 2)
+    assert chosen.tolist() == [[1000, 3000, 0], [0, 0, 900]]
+    assert offsets.tolist() == [[3, 2, 0], [0, 0, 0]]
+    assert np.array_equal(colourise(d), colourise(chosen, step=1))
+    body = observed_cloud_payload(d, rgb, 2, {})
+    assert body.startswith(b'GCL3')
+    start = 8 + struct.unpack_from('<I', body, 4)[0]
+    assert json.loads(body[8:start])['width'] == 3
+    assert np.frombuffer(body, '<u2', 6, start).tolist() == list(chosen.flat)
+    colours = np.frombuffer(body, np.uint8, 18, start+12).reshape(6, 3)
+    assert np.array_equal(colours[[0, 1, 5]], rgb[[1, 1, 2], [1, 2, 4]])
+    assert list(body[-6:]) == list(offsets.flat)

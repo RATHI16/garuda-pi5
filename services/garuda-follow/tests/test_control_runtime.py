@@ -94,6 +94,9 @@ def test_browser_expiry_holds_real_control_loop_and_requires_explicit_resume(mon
         # Actual HTTP release/queued select -> tick -> async producer intent.
         import io
         node.phase='GROUND';node.status.arming_state=1
+        assert node.land_report(time.monotonic()) is None
+        node.on_land(SimpleNamespace(landed=True))
+        assert node.land_report(node.land_at+2.1) is None
         with monkeypatch.context() as m:
             m.setattr(sitl_demo.urllib.request,'urlopen',lambda *a,**k:io.BytesIO(b'{"ok":true}'))
             node.action({'command':'source','kind':'onboard'},time.monotonic())

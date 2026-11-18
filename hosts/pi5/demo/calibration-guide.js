@@ -14,7 +14,7 @@ function patternGeometry(kind,columns,rows){
 }
 function nextStep(config,captures){
  const goal=config.goal||'practice';
- const useful=captures.filter(c=>c.pattern_found&&c.has_depth&&(goal!=='depth'||(Number.isFinite(c.distance_m)&&c.distance_m>0&&c.board_depth?.median_m>0)));
+ const useful=captures.filter(c=>c.pattern_found&&c.has_depth&&(goal!=='depth'||((!config.require_measured_tape||c.tape_measured===true)&&Number.isFinite(c.distance_m)&&c.distance_m>0&&c.board_depth?.median_m>0)));
  const tune=useful.filter(c=>c.split==='tune').length, validation=useful.filter(c=>c.split==='validate').length;
  const needed=goal==='lens'?12:3, split=tune<needed?'tune':'validate';
  const depthSteps=['Near position · centre the board','Middle position · move the board farther away','Far position · keep the entire pattern visible'];

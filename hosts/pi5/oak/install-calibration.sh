@@ -3,12 +3,14 @@
 set -euo pipefail
 source_root=$(cd "$(dirname "$0")/.." && pwd)
 target_root=/home/garuda/garuda-calibration
-for file in oak_calibration.py oak_pair.py oak/geometry.py demo/calibration-centre.html demo/centre.js demo/calibration.html demo/calibration.js demo/calibration.css demo/calibration-guide.js oak/garuda-calibration.service; do test -f "$source_root/$file"; done
+handouts=(demo/chennai/OPERATOR.md demo/chennai/CLAUDE_HANDOFF.md demo/chennai/oak-targets-a4.pdf)
+for file in "${handouts[@]}" oak_calibration.py oak_depth_view.py oak_pair.py oak/geometry.py demo/calibration-centre.html demo/centre.js demo/calibration.html demo/calibration.js demo/calibration.css demo/calibration-guide.js oak/garuda-calibration.service; do test -f "$source_root/$file"; done
 if systemctl cat garuda-calibration.service >/dev/null 2>&1; then sudo systemctl stop garuda-calibration.service; fi
-install -d "$target_root/demo" "$target_root/oak"
-install -m 0644 "$source_root/oak_calibration.py" "$source_root/oak_pair.py" "$target_root/"
+install -d "$target_root/demo/chennai" "$target_root/oak"
+install -m 0644 "$source_root/oak_calibration.py" "$source_root/oak_pair.py" "$source_root/oak_depth_view.py" "$target_root/"
 install -m 0644 "$source_root/oak/geometry.py" "$target_root/oak/"
 for file in calibration-centre.html centre.js calibration.html calibration.js calibration.css calibration-guide.js; do install -m 0644 "$source_root/demo/$file" "$target_root/demo/$file"; done
+for file in "${handouts[@]}"; do install -m 0644 "$source_root/$file" "$target_root/$file"; done
 sudo install -m 0644 "$source_root/oak/garuda-calibration.service" /etc/systemd/system/garuda-calibration.service
 sudo systemctl daemon-reload
 sudo systemctl enable garuda-calibration.service

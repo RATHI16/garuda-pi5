@@ -3,6 +3,7 @@
 const $=id=>document.getElementById(id),F=new Garuda.Flight();
 let S=null,cal=null,savedCal=null,calPoints=null,calSignature=null,previousMode='',lastPaint=0,lastTrail=0;
 let trail=[],targetTrail=[],events=[],reduced=matchMedia('(prefers-reduced-motion:reduce)').matches,hadHold=false;
+let previewFollowPending=false;
 let lastPeople='',gx=0.5,gy=0.5,gh=1,videoError=false;
 // V: the PX4 lab as this page's ONE vehicle while the link is on (set by lab.js), else null.
 let O=null,V=null,caps=Garuda.capabilities(null);const mapFit=new Garuda.MapFit();
@@ -91,25 +92,30 @@ function updateUI(o,now){
   $('thermal').textContent=temp>=80?'High temperature — fit active cooling':'';
   const range=Garuda.distance(S,F.id);$('range').textContent='Depth estimate: '+(fresh&&range!==null?range.toFixed(2)+' m (model estimate; verify physically)':'unavailable / invalid');
   const stereoText=Garuda.stereo(S,F.id,fresh);$('stereo').hidden=stereoText===null;if(stereoText!==null)$('stereo').textContent=stereoText;
-  {const dv=Garuda.depthViews(caps,posSource.seen);$('depthPanel').hidden=!dv.panel;$('depthButton').hidden=!dv.map;$('cloudButton').hidden=!dv.cloud;}
+  const views=Garuda.depthViews(caps,posSource.seen);
+  $('depthPanel').hidden=!views.panel;
+  const hideMap=!views.map;
+  if($('depthButton').hidden!==hideMap)$('depthButton').hidden=hideMap;
+  $('cloudButton').hidden=!views.cloud;
   {const r=Garuda.rangeReadout(S,F.id,fresh,caps),box=$('rangeBig');box.hidden=r===null;
    if(r){$('rangeValue').textContent=r.value;$('rangeSource').textContent=r.source;$('rangeBadge').textContent=r.badge;box.dataset.ok=String(r.ok);box.title=stereoText||'';}
    const idn=fresh?Garuda.identityStatus(S,F.id):null,chip=$('identityChip');chip.hidden=idn===null;if(idn){chip.textContent=idn.text;chip.dataset.level=idn.level;}}
   if(M==='HOLD'||M==='BRAKE')hadHold=true;
   const j=F.id===null?1:(M==='BRAKE'||M==='HOLD'?3:(hadHold?4:2));for(let i=1;i<=4;i++)$('j'+i).className=i===j?'active':'';
-  const stories={IDLE:['Movement earns trust.','Choose yourself in the live view. Walk sideways, hide briefly, then return. The simulated vehicle responds to fresh tracking observations.'],ACQUIRE:['A moment to be sure.','Waiting for a stable sequence of confident observations before movement resumes.'],FOLLOW:[hadHold?'Back in view. Back in motion.':'You lead. Intelligence follows.','The selected track drives this simulated vehicle. Camera perception runs on the Pi with Hailo-10H acceleration.'],BRAKE:['Lost vision. Deliberate stop.','Movement is braking to zero. The simulation does not continue toward the old target destination.'],HOLD:['Trust includes knowing when to stop.',F.reason+'. '+(F.paused?'Resume when ready.':F.faceEnabled?'Return requires a clear enrolled-face match; uncertain matches keep the vehicle holding.':S?.stats?.identity?'The camera is looking for the same person by learned appearance; an uncertain match keeps the vehicle holding.':'Waiting for a clear clothing match; similar-looking candidates keep the vehicle holding.') ]};
-  stories.GROUND=['Ready on the ground.','Select a person, then press Take off. All flight commands control only this simulation.'];
+  const stories={IDLE:['Movement earns trust.','Choose yourself in the live view. Walk sideways, hide briefly, then return. The simulated vehicle responds to fresh tracking observations.'],ACQUIRE:['A moment to be sure.','Waiting for a stable sequence of confident observations before movement resumes.'],FOLLOW:[hadHold?'Back in view. Back in motion.':'You lead. Intelligence follows.','The selected track drives this simulated vehicle. Camera perception runs on the Pi with Hailo-10H acceleration.'],BRAKE:['Lost vision. Deliberate stop.','Movement is braking to zero. The simulation does not continue toward the old target destination.'],HOLD:['Trust includes knowing when to stop.',F.reason+(F.requiresSelection||Garuda.identityStatus(S,F.id)?.level==='bad'?'':'. '+(F.paused?'Resume when ready.':F.faceEnabled?'Return requires a clear enrolled-face match; uncertain matches keep the vehicle holding.':S?.stats?.identity?'The camera is looking for the same person by learned appearance; an uncertain match keeps the vehicle holding.':'Waiting for a clear clothing match; similar-looking candidates keep the vehicle holding.')) ]};
+  stories.GROUND=['Ready on the ground.','Take off in the page simulation when ready. Choose a person to use Follow.'];
   stories.TAKEOFF=['Taking off.','The simulated vehicle climbs vertically before following the selected target.'];
   stories.LAND=['Coming down.','The simulated vehicle brakes, then descends at its current position. Take off is required to fly again.'];
   stories.CIRCLE=['A new perspective.','The simulated vehicle circles the selected target. Follow gap sets the circle radius; loss of vision brakes and holds.'];
   if(V){const what=V.kind==='fixed_stereo'?'The camera\'s stereo distance (unvalidated) and an assumed camera position':V.kind==='mono_estimate'?'A schematic position from the size of your box in the picture (one lens, not a measured distance)':'The lab\'s own source';
-    Object.assign(stories,{GROUND:['Ready on the ground.','Select a person, then press Take off. The buttons command the simulated PX4 vehicle in the lab on this computer.'],
+    Object.assign(stories,{GROUND:['Ready on the ground.','Take off in the laptop simulator when ready. Choose a person to use Follow.'],
       TAKEOFF:['Taking off.','The simulated PX4 vehicle climbs before it follows the selected person.'],LAND:['Coming down.','The simulated PX4 vehicle is landing where it is.'],
       FOLLOW:['You lead. Intelligence follows.',what+(V.kind==='mono_estimate'?' steers':' steer')+' the simulated PX4 vehicle.'],CIRCLE:['A new perspective.','The simulated PX4 vehicle circles the selected person.'],
       HOLD:['Trust includes knowing when to stop.',(V.reason||'Holding position')+'.'],
       'NO CONTACT':['No contact with the PX4 lab.','This page is linked to the PX4 lab but cannot reach it. The vehicle\'s state is unknown, and nothing is animated here in its place.']});}
   if(O)Object.assign(stories,{FOLLOW:['You lead. This is what it would do.','The camera computer turns the selected person\'s position in the picture into a turn rate, and '+O.source+' into a forward speed. '+(O.send.sending?'It is being sent to '+(O.send.request==='fc'?'the flight controller':'the PX4 simulator on the PC')+'.':'It is shown here and not sent.')],HOLD:['Trust includes knowing when to stop.',O.reason+'. Every speed is zero until the selected person is seen clearly again.']});
   const story=stories[M]||stories.HOLD;$('headline').textContent=story[0];$('story').textContent=story[1];
+  if(!V&&!O&&previewFollowPending&&F.id===null&&!F.paused&&F.airState!=='LANDING')$('story').textContent='Follow selected. Choose a person to begin.';
   renderSend();
   if(previousMode!==M){events.unshift(new Date().toLocaleTimeString()+'  '+M+' — '+(O?O.reason:V?V.reason:F.reason));events=events.slice(0,5);$('eventlog').replaceChildren(...events.map(e=>{const p=document.createElement('div');p.textContent=e;return p;}));previousMode=M;}
   if(typeof updateControls==='function')updateControls(o,now);
@@ -135,8 +141,8 @@ $('mountSelect').onchange=async()=>{const value=$('mountSelect').value;$('mountS
 // (the PX4 simulator on the PC, or a flight-controller bridge) does the sending and says so.
 function sendError(t){$('sendStatus').dataset.error=t;setTimeout(()=>{if($('sendStatus').dataset.error===t)delete $('sendStatus').dataset.error;},6000);}
 async function askSend(target){
-  if(target==='fc_hold'&&!confirm('Start the zero-setpoint stream to the flight-controller bridge\'s endpoint?\n\nThis lets the flight controller enter and stay in offboard mode, holding still. It must be the only offboard publisher. The status line says whether the bridge is on a simulator or a real flight controller.'))return;
-  if(target==='fc'&&!confirm('Send the follow command through the flight-controller bridge?\n\nThe vehicle will turn and move toward the selected person if it is armed and in offboard mode. Props off or restrained unless this flight is authorised.'))return;
+  if(target==='fc_hold'&&!confirm('Request a zero-setpoint stream from the simulator bridge? This keeps Offboard live. Check the reported PX4 mode for the aircraft response.'))return;
+  if(target==='fc'&&!confirm('Request Follow from the simulator bridge? Physical FC connections in this release are receive-only.'))return;
   try{const r=await fetch('/api/transmit?target='+target,{method:'POST'}),j=await r.json();if(!r.ok||!j.ok)throw Error(j.reason||'Refused');delete $('sendStatus').dataset.error;}catch(e){sendError(e.message.charAt(0).toUpperCase()+e.message.slice(1));}
 }
 $('sendOff').onclick=()=>askSend('off');$('sendSim').onclick=()=>askSend('sim');$('sendFcHold').onclick=()=>askSend('fc_hold');$('sendFc').onclick=()=>askSend('fc');
@@ -213,15 +219,28 @@ function tick(now){requestAnimationFrame(tick);if(now-lastPaint<32)return;const 
 
 // Stereo depth map inset: fetched only while switched on (it makes the Pi send and colour depth frames).
 // A request that stalls, or a camera that stops, hides the picture instead of leaving it frozen.
-(function(){const btn=$('depthButton'),img=$('depthPip'),gate=new Garuda.LiveGate(2500,2000);let timer=null,on=false,pending=null;
- function tick(){const now=Date.now();if(btn.hidden||gate.state(now,false)!=='live')img.hidden=true;if(btn.hidden)return;
-  if(pending&&gate.timedOut(now)){pending.onload=pending.onerror=null;pending.src='';pending=null;}
-  const token=gate.begin(now);if(token===null)return;const n=new Image();pending=n;
-  n.onload=()=>{if(gate.ok(token,Date.now())){img.src=n.src;img.hidden=!on;}if(pending===n)pending=null;};
-  n.onerror=()=>{gate.fail(token);img.hidden=true;if(pending===n)pending=null;};
-  n.src='/stereo_depth.jpg?t='+now;}
- btn.onclick=()=>{on=!on;btn.classList.toggle('active',on);btn.textContent=on?'Hide depth map':'Depth map';
-  if(on){tick();timer=setInterval(tick,330);}else{clearInterval(timer);timer=null;img.hidden=true;}};
+(function(){
+ const btn=$('depthButton'),img=$('depthPip'),expand=$('inspectDepth'),dialog=$('depthInspector'),label=$('depthRate');
+ let on=false;
+ const viewer=new DepthViewer({
+   url:()=>'/stereo_depth.jpg',period:()=>500,
+   decode:r=>depthBitmap(r,bmp=>{img.getContext('2d').drawImage(bmp,0,0,img.width,img.height);img.hidden=false;}),
+   clear:()=>{img.hidden=true;},status:text=>{label.textContent=text;}
+ });
+ function sync(){
+   const active=on&&!document.hidden&&!btn.hidden&&!dialog.open;
+   expand.hidden=!on||btn.hidden;label.hidden=!active;
+   if(active)viewer.start();else viewer.stop();
+ }
+ function setDepthVisible(show){
+   on=show;btn.classList.toggle('active',show);btn.setAttribute('aria-pressed',String(show));
+   btn.textContent=show?'Hide depth map':'Depth map';sync();
+ }
+ btn.onclick=()=>setDepthVisible(!on);
+ expand.addEventListener('click',()=>{label.hidden=true;viewer.stop();});
+ dialog.addEventListener('close',()=>{setDepthVisible(false);if(!btn.hidden)btn.focus({preventScroll:true});});
+ new MutationObserver(sync).observe(btn,{attributes:true,attributeFilter:['hidden']});
+ document.addEventListener('visibilitychange',sync);
 })();
 // The 3-D point cloud lives on its own page so it can use the whole window.
 $('cloudButton').onclick=()=>window.open('/demo/cloud','garuda-cloud');

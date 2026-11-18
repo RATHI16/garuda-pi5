@@ -183,7 +183,7 @@ def main():
             self.core=DemoControl();self.core.accept_mono=bool(args.accept_mono_estimate_in_simulation);self.core.accept_onboard=bool(args.accept_onboard_in_simulation);self.pose=None;self.pose_at=-math.inf
             self.core.accept_preview=bool(args.accept_preview_stereo_in_simulation);self.core.reacquire=bool(args.stereo_reacquire)
             self.pose_history=PoseHistory();self.pose_match=None;self.reselection_logged=False
-            self.status=None;self.status_at=-math.inf;self.landed=True
+            self.status=None;self.status_at=-math.inf;self.landed=None;self.land_at=-math.inf
             self.phase='GROUND';self.since=time.monotonic();self.last_cmd=-math.inf
             self.ack=None;self.error='';self.hold_alt=1.5;self.start_z=None;self.target_z=None
             self.hold_xy=None;self.intent=(0.,0.,None)
@@ -208,7 +208,11 @@ def main():
             if self.pose_history.add(now,msg.position,msg.q,getattr(msg,'timestamp_sample',None)):
                 self.pose=msg;self.pose_at=now/1e9
         def on_status(self,msg):self.status=msg;self.status_at=time.monotonic()
-        def on_land(self,msg):self.landed=msg.landed
+        def on_land(self,msg):
+            self.landed=msg.landed;self.land_at=time.monotonic()
+        def land_report(self,now):
+            # PX4 repeats VehicleLandDetected at 1 Hz even when its value stays the same.
+            return self.landed if 0 <= now-self.land_at < 2 else None
         def on_ack(self,msg):
             if msg.target_system==250:
                 self.ack={'command':int(msg.command),'result':int(msg.result)}
@@ -225,7 +229,7 @@ def main():
                 raise ValueError('Unknown command')
             events.append(dict(time=time.strftime('%H:%M:%S'),command=command))
             if command in ('test_mode','bench_reset'):
-                grounded(self.fresh(now),self.armed(),self.landed,self.phase)
+                grounded(self.fresh(now),self.armed(),self.land_report(now),self.phase)
                 if command=='bench_reset':
                     self.bench_turn.reset();self.live_gate.reset();self.core.reset();return
                 selected=a.get('mode')
@@ -235,7 +239,7 @@ def main():
                 self.action(dict(command='source',kind='pi_onboard' if selected=='bench' else 'gazebo'),now)
                 return
             if command=='source':
-                if not self.fresh(now) or self.armed() or not self.landed or self.phase not in ('GROUND','FAULT'):raise ValueError('Land before changing camera source')
+                if not self.fresh(now) or self.armed() or self.land_report(now) is not True or self.phase not in ('GROUND','FAULT'):raise ValueError('Land before changing camera source')
                 kind=a.get('kind')
                 if kind not in ('pi','gazebo','replay','fixed_stereo','mono_estimate','onboard','pi_onboard'):raise ValueError('Unknown camera source')
                 if kind=='onboard' and not self.core.accept_onboard:raise ValueError('Use --accept-onboard-in-simulation')
@@ -288,6 +292,7 @@ def main():
                 if command=='takeoff' and self.armed():return
                 if not self.fresh(now):raise ValueError('PX4 telemetry unavailable')
                 if not self.armed():
+                    if self.land_report(now) is not True:raise ValueError('Waiting for fresh ground contact from PX4')
                     self.start_z=float(self.pose.position[2]);self.target_z=self.start_z-self.hold_alt
                     self.core.home=tuple(map(float,self.pose.position[:2]))
                     self.phase='PRESTREAM';self.since=now;self.last_cmd=-math.inf;self.hold_xy=tuple(map(float,self.pose.position[:2]))
@@ -349,7 +354,7 @@ def main():
                     list(map(float,self.pose.position)) if self.pose else None, list(map(float,self.pose.q)) if self.pose else None,fresh)
             if fresh and self.error=='PX4 telemetry unavailable':self.error=''   # do not keep showing it once telemetry is back
             if self.phase=='LANDING':
-                if not armed and self.landed:self.phase='GROUND'
+                if fresh and not armed and self.land_report(now) is True:self.phase='GROUND'
                 elif fresh and now-self.last_cmd>1:
                     self.send(VehicleCommand.VEHICLE_CMD_NAV_LAND);self.last_cmd=now
             active=self.phase in ('PRESTREAM','REQUESTING','FLYING')
@@ -428,7 +433,7 @@ def main():
                     frame_seq=self.core.snapshot.get('frame',{}).get('seq'),
                     perception_age_ms=age+(now-self.core.received)*1000 if isinstance(age,(int,float)) else None))
             self.reselection_logged=self.core.requires_reselection
-            published={'phase':self.phase,'armed':armed,'nav_state':nav,'landed':self.landed,
+            published={'phase':self.phase,'armed':armed,'nav_state':nav,'landed':self.land_report(now),'landed_fresh':self.land_report(now) is not None,
                 'position':list(map(float,self.pose.position)) if self.pose else None,'telemetry_fresh':fresh,
                 'control_timing':{'tick_monotonic':now,
                     'last_distinct_frame_monotonic':self.core.progress if math.isfinite(self.core.progress) else None},

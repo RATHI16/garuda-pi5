@@ -33,20 +33,38 @@ function patternUI(){
  for(const button of document.querySelectorAll('[data-pattern]'))button.setAttribute('aria-pressed',String(button.dataset.pattern===kind));
 }
 for(const mini of document.querySelectorAll('[data-mini]'))mini.innerHTML=diagram(mini.dataset.mini,4,3,false);
-for(const button of document.querySelectorAll('[data-pattern]'))button.onclick=()=>{$('pattern').value=button.dataset.pattern;patternUI();};
-for(const id of ['columns','rows'])$(id).oninput=patternUI;patternUI();
+const sheetPatterns={
+ '1':['checkerboard',9,6],'2':['checkerboard',11,8],
+ '3':['circles',7,5],'4':['asymmetric_circles',4,7]
+};
+$('printedSheet').onchange=()=>{
+ const sheet=sheetPatterns[$('printedSheet').value];
+ if(sheet){[$('pattern').value,$('columns').value,$('rows').value]=sheet;$('pitch').value='';patternUI();}
+};
+function customPattern(){$('printedSheet').value='';$('pitch').value='';patternUI();}
+for(const button of document.querySelectorAll('[data-pattern]'))button.onclick=()=>{$('pattern').value=button.dataset.pattern;customPattern();};
+for(const id of ['columns','rows'])$(id).oninput=customPattern;
+$('mountContext').onchange=()=>{$('mountId').required=$('mountContext').value==='grounded_airframe';};
+patternUI();
 function guide(){
  if(!selected){$('phase').textContent='PREPARE';$('guideTitle').textContent='Mount the board and enter its dimensions';$('guideText').textContent='The diagram marks the points we detect. Check the count and measure the pattern pitch before starting.';return;}
  const step=G.nextStep(selected.config,selected.captures);$('phase').textContent=step.split==='tune'?'SETUP / TUNING':'INDEPENDENT VALIDATION';
  $('guideTitle').textContent=step.title;$('guideText').textContent=step.instruction;$('split').value=step.split;$('distance').required=step.goal==='depth';
  $('counts').textContent=`${step.tune}/${step.needed} setup · ${step.validation}/3 checks · ${selected.captures.length}/60 saved`;
 }
+function clearTape(){
+ $('distance').value='';$('tapeUncertainty').value='';$('measured').checked=false;
+}
+$('distance').addEventListener('input',()=>{$('measured').checked=false;});
 function render(){
+ const depthCheck=selected?.config?.goal==='depth';
+ $('tapeCheck').hidden=!depthCheck;$('measured').required=!!depthCheck;
+ clearTape();
  $('create').hidden=!!selected;$('sessionInfo').hidden=!selected;$('newSession').hidden=!selected;$('captures').replaceChildren();$('empty').hidden=!!selected?.captures.length;
  $('preview').hidden=true;$('depthPreview').hidden=true;$('captureInfo').textContent='';$('resultSection').hidden=true;
  if(!selected){$('counts').textContent='No session selected';guide();controls();return;}
  const c=selected.config;
- $('sessionInfo').textContent=`${c.name}\n${c.operator} · ${c.camera}\n${c.pattern} · ${c.columns} × ${c.rows} · ${c.pitch_mm} mm\nBoard: ${c.board_id} · ${c.board_condition}\nTape reference: ${c.tape_reference}\n${selected.binding?.mode||'Waiting for first capture'}`;
+ $('sessionInfo').textContent=`${c.name}\n${c.operator} · ${c.camera}\n${c.pattern} · ${c.columns} × ${c.rows} · ${c.pitch_mm} mm\nMount: ${c.mount_context||'unspecified'} ${c.mount_id||''}\nBoard: ${c.board_id} · ${c.board_condition}\nTape reference: ${c.tape_reference}\n${selected.binding?.mode||'Waiting for first capture'}`;
  selected.captures.forEach((c,i)=>{const row=document.createElement('tr'),cell=document.createElement('td'),button=document.createElement('button');button.textContent=`View ${i+1}`;button.onclick=()=>{
  $('preview').src=`/api/session/${selected.id}/${c.id}-preview.jpg`;$('preview').hidden=false;$('depthPreview').hidden=!c.has_depth;
  if(c.has_depth)$('depthPreview').src=`/api/session/${selected.id}/${c.id}-depth-preview.jpg`;
@@ -56,9 +74,11 @@ function render(){
 }
 async function refresh(id){sessions=await api('/api/sessions');$('sessions').replaceChildren(new Option('Start a new session',''));for(const s of sessions)$('sessions').add(new Option(s.config.name+' · '+s.id.slice(0,6),s.id));selected=sessions.find(s=>s.id===id)||null;$('sessions').value=selected?.id||'';render();}
 $('sessions').onchange=()=>{selected=sessions.find(s=>s.id===$('sessions').value)||null;render();message(selected?'Session loaded. Follow the next step below.':'Prepare your pattern and start a new session.');};
-$('newSession').onclick=()=>{if(!selected)return;const c=selected.config;for(const name of ['operator','camera','board_id','pattern','columns','rows','pitch_mm','board_condition','tape_reference'])document.querySelector(`#create [name="${name}"]`).value=c[name];$('goal').value=c.goal||'depth';$('name').value=c.name+' · depth';$('distance').value='';$('note').value='';selected=null;$('sessions').value='';patternUI();render();message('Board details copied. Check them, then start the new session. Older images are preserved.');};
+$('newSession').onclick=()=>{if(!selected)return;const c=selected.config;for(const name of ['operator','camera','board_id','pattern','columns','rows','pitch_mm','board_condition','tape_reference'])document.querySelector(`#create [name="${name}"]`).value=c[name];$('mountContext').value=c.mount_context||'unspecified';$('mountId').value=c.mount_id||'';$('mountContext').onchange();$('printedSheet').value='';$('goal').value=c.goal||'depth';$('name').value=c.name+' · depth';$('distance').value='';$('note').value='';selected=null;$('sessions').value='';patternUI();render();message('Board details copied. Check them, then start the new session. Older images are preserved.');};
 $('create').onsubmit=e=>{e.preventDefault();operation(async()=>{const s=await api('/api/sessions',Object.fromEntries(new FormData(e.target)));await refresh(s.id);message('Session ready. Follow the highlighted step and capture RGB + depth.');});};
-$('capture').onsubmit=e=>{e.preventDefault();if(!selected)return;operation(async()=>{message('Capturing a matched RGB + depth pair and detecting the pattern…');const id=selected.id;const s=await api(`/api/session/${id}/capture`,{split:$('split').value,distance_m:$('distance').value===''?null:Number($('distance').value),note:$('note').value});await refresh(id);const c=s.captures.at(-1);message(c.pattern_found?'Pattern detected. Inspect the saved colour and depth images, then follow the next step.':'Image and depth saved, but pattern not found. Check the illustrated count, full visibility, glare and motion.',!c.pattern_found);$('captures').lastChild?.querySelector('button').click();$('distance').value='';});};
+$('capture').onsubmit=e=>{e.preventDefault();if(!selected)return;operation(async()=>{message('Capturing a matched RGB + depth pair and detecting the pattern…');const id=selected.id;const s=await api(`/api/session/${id}/capture`,{split:$('split').value,distance_m:$('distance').value===''?null:Number($('distance').value),note:$('note').value,
+ tape_measured:selected.config.goal==='depth'&&$('measured').checked,
+ tape_uncertainty_mm:selected.config.goal==='depth'&&$('tapeUncertainty').value!==''?Number($('tapeUncertainty').value):null});await refresh(id);const c=s.captures.at(-1);message(c.pattern_found?'Pattern detected. Inspect the saved colour and depth images, then follow the next step.':'Image and depth saved, but pattern not found. Check the illustrated count, full visibility, glare and motion.',!c.pattern_found);$('captures').lastChild?.querySelector('button').click();$('distance').value='';});};
 $('solve').onclick=()=>operation(async()=>{message('Estimating delivered-RGB candidate…');const r=await api(`/api/session/${selected.id}/solve`,{});$('resultSection').hidden=false;$('result').textContent=JSON.stringify(r,null,2);message('Candidate saved for review. No camera settings changed.');});
 $('export').onclick=()=>operation(async()=>{message('Preparing download…');const r=await fetch(`/api/session/${selected.id}/export`,{signal:AbortSignal.timeout(60000)});if(!r.ok){const d=await r.json();throw Error(d.error);}const url=URL.createObjectURL(await r.blob()),a=document.createElement('a');a.href=url;a.download=`garuda-calibration-${selected.id}.zip`;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);message('ZIP downloaded with images and session metadata.');});
 function offline(reason){live=null;$('depthStatus').textContent='DEPTH NOT READY';$('depthStatus').className='badge off';$('live').removeAttribute('src');$('liveDepth').hidden=true;$('depthUnavailable').hidden=false;$('depthUnavailable').textContent=reason;$('pairStatus').textContent='No fresh pair';$('depthQuality').textContent='';controls();}

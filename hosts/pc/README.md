@@ -1,5 +1,7 @@
 # Isolated ROS 2 / PX4 / Gazebo flight lab
 
+For the current public release, follow the [no-target GUI rehearsal](../../docs/TESTING_2026-11-18.md#5-rehearse-the-gui-in-gazebo). It gives a pass condition for takeoff, Hold, landing and confirmed disarm.
+
 The original Pi demo is the home view; switch to the PX4 flight lab in the same
 browser window. The Pi camera remains the primary image. This is a PC simulator
 integration; the working Pi deployment remains independently available.

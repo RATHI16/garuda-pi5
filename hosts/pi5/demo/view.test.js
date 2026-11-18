@@ -45,7 +45,7 @@ test('identity status is shown only for this display\'s person and never default
   assert.equal(identityStatus(st({target:7,state:'tracking',confirmed:false}),7).level,'warn');
   // A confirmed decision that belongs to another frame, camera run or detector process is not shown green.
   for(const stale of [{frame_seq:4},{frame_epoch:'cam:1'},{instance:'old'},{instance:undefined}])
-    assert.deepEqual(identityStatus(st({target:7,state:'tracking',confirmed:true,...stale}),7),{level:'warn',text:'CHECKING IDENTITY'});
+    assert.deepEqual(identityStatus(st({target:7,state:'tracking',confirmed:true,...stale}),7),{level:'warn',text:'WAITING FOR CURRENT IDENTITY'});
   assert.equal(identityStatus({stats:{identity:{target:7,state:'tracking',confirmed:true}}},7).level,'warn');
   assert.equal(identityStatus(st({target:7,state:'verifying',confirmed:false}),7).text,'CHECKING IDENTITY');
   assert.equal(identityStatus(st({target:7,state:'searching'}),7).level,'warn');
@@ -194,7 +194,7 @@ test('another display in control: view only here, but land and hold stay availab
 });
 test('lapsed control: the page says so, sends nothing unasked, and an explicit command may take control again',()=>{
   const v=labView(true,lab({...ctl(null,{expired:true}),behavior:'hold'}),'me');
-  assert.equal(v.control,'expired');assert.match(v.reason,/control lapsed.*holding.*press a command/);
+  assert.equal(v.control,'expired');assert.match(v.reason,/control lapsed.*explicit flight request/);
   assert.equal(v.can.auto,false);assert.equal(v.can.follow,true);assert.equal(v.can.hold,true);
   assert.equal(labView(true,lab(ctl('me')),'me').can.auto,true);assert.equal(labView(true,lab(ctl(null)),'me').can.auto,true);
 });
@@ -317,3 +317,29 @@ test('send state: the bridge\'s stream is shown from its own explicit statement,
   const lie=transmitView(veh({transmit:tx('fc_hold',fcl('sending',true))}));assert.equal(lie.sending,false);assert.equal(lie.real,false);
   assert.equal(transmitView(veh({transmit:tx('fc',fcl('sending',true))})).real,true);
   assert.equal(transmitView(veh({transmit:tx('off',{fc:{alive:false,state:null,streaming:true,reason:null,age_ms:null}})})).stream,null);});
+
+test('a linked hold gives camera advice only for the current detector and target',()=>{
+  const frame={seq:8,epoch:'cam:2'};
+  const lab={phase:'FLYING',behavior:'hold',telemetry_fresh:true,target_id:7,
+    frame,source_instance:'pi',source_kind:'fixed_stereo',reason:'Camera is checking that this is still the selected person • hold'};
+  const identity={target:7,frame_seq:8,frame_epoch:'cam:2',instance:'pi',confirmed:false};
+  const camera=(changes={})=>({frame,stats:{instance:'pi',identity:{...identity,...changes}}});
+  const reason=(changes)=>labView(true,lab,null,camera(changes)).reason;
+  for(const state of ['expired','ambiguous','no_reference'])assert.match(reason({state}),/select again/);
+  for(const state of ['confirming','verifying','searching'])assert.match(reason({state}),/checking/);
+  assert.match(reason({state:'tracking',confirmed:true}),/waiting for lab confirmation/);
+  assert.match(reason({target:8,state:'expired'}),/awaiting current/);
+  assert.match(reason({frame_seq:7,state:'expired'}),/current identity decision/);
+  assert.match(labView(true,lab).reason,/awaiting current/);
+  assert.match(labView(true,{...lab,source_instance:'old'},null,camera({state:'expired'})).reason,/awaiting current/);
+  assert.match(labView(true,{...lab,source_kind:'pi_onboard',reason:'Camera mount changed; choose Nowhere then PX4 on the PC again'}).reason,/^Camera mount changed$/);
+});
+
+test('an unconfirmed target suspends the Follow readout and stale telemetry clears position',()=>{
+  const v=labView(true,lab({lock_state:'RESELECT',requires_reselection:true}));
+  assert.equal(v.mode,'FOLLOW SUSPENDED');
+  assert.equal(v.target,null);
+  const gone=labView(true,lab({telemetry_fresh:false}));
+  assert.equal(gone.mode,'UNKNOWN');assert.equal(gone.target,null);
+  assert.equal(gone.altitude,null);assert.equal(gone.airborne,null);
+});

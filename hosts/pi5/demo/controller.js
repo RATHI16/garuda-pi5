@@ -115,8 +115,8 @@ class Flight {
     if(this.epoch!==s.frame?.epoch){this.requiresSelection=true;return {reason:'Camera or tracker changed • select again'};}
     // Track IDs mean nothing across a detector restart, even if the camera's own run continued.
     if((this.instance??null)!==(s.stats?.instance??null)){this.requiresSelection=true;return {reason:'Detector restarted • select again'};}
-    if(s.stats?.identity&&s.stats.identity.target===this.id&&s.stats.identity.confirmed===false)return {reason:'Camera is checking that this is still the selected person'};
     if(this.requiresSelection)return {reason:'Target identity uncertain • select again'};
+    if(s.stats?.identity?.target===this.id&&s.stats.identity.confirmed===false)return {reason:identityAdvice(identityStatus(s,this.id))};
     let t=s.tracks?.find(t=>t.id===this.id);
     if(!t||t.coasting){
       // When the camera keeps the identity itself (learned re-ID), this display does not make its
@@ -143,7 +143,7 @@ class Flight {
         this.mode='LAND';this.reason='Braking, then landing at current position';
         if(Math.hypot(this.vx,this.vy)<.03)this.altitude=Math.max(0,this.altitude-.6*dt);
         if(this.altitude===0){this.airState='GROUNDED';this.mode='GROUND';this.reason='Landed • press Take off to fly again';}
-      }else{this.mode='GROUND';this.reason='Grounded • select a target and press Take off';}
+      }else{this.mode='GROUND';this.reason='Grounded • press Take off to lift off here';}
     }else if(o.point){
       if(this.goodSince===null){this.goodSince=now;this.lastGoodSeq=this.seq;}
       if(now-this.goodSince>=500&&this.seq!==this.lastGoodSeq){
@@ -312,16 +312,23 @@ function decodeCloud(buf){
   if(!(buf instanceof ArrayBuffer)||buf.byteLength<8)return null;
   const magic=String.fromCharCode(...new Uint8Array(buf,0,4)),dv=new DataView(buf);let w,h,offset=8,geometry=null,step=null;
   if(magic==='GCL1'){w=dv.getUint16(4,true);h=dv.getUint16(6,true);}
-  else if(magic==='GCL2'){
+  else if(magic==='GCL2'||magic==='GCL3'){
     const len=dv.getUint32(4,true);if(len>16384||8+len>buf.byteLength)return null;
     let m;try{m=JSON.parse(new TextDecoder().decode(new Uint8Array(buf,8,len)));}catch(e){return null;}
     if(!validGeometry(m.geometry)||![2,4,8].includes(m.step))return null;
     ({width:w,height:h,geometry,step}=m);offset+=len;
     if(w!==Math.ceil(geometry.width/step)||h!==Math.ceil(geometry.height/step))return null;
   }else return null;
-  const n=w*h;if(!Number.isInteger(w)||!Number.isInteger(h)||w<=0||h<=0||buf.byteLength!==offset+n*5)return null;
+  const n=w*h;if(!Number.isInteger(w)||!Number.isInteger(h)||w<=0||h<=0||buf.byteLength!==offset+n*(magic==='GCL3'?6:5))return null;
   const depth=new Uint16Array(n);for(let i=0;i<n;i++)depth[i]=dv.getUint16(offset+i*2,true);
-  return {w,h,depth,bgr:new Uint8Array(buf,offset+n*2,n*3),geometry,step};
+  const offsets=magic==='GCL3'?new Uint8Array(buf,offset+n*5,n):null;
+  if(offsets){
+    for(let i=0;i<n;i++){
+      const dx=offsets[i]%step,dy=Math.floor(offsets[i]/step);
+      if(dy>=step||(i%w)*step+dx>=geometry.width||Math.floor(i/w)*step+dy>=geometry.height)return null;
+    }
+  }
+  return {w,h,depth,offsets,bgr:new Uint8Array(buf,offset+n*2,n*3),geometry,step};
 }
 // Back-project to metres in the camera frame (x right, y down, z forward). Same assumption as
 // the follow position: the value is depth along the optical axis. One viewpoint only - this
@@ -335,28 +342,57 @@ function cloudPoints(c,hfovDeg=STEREO_HFOV_DEG,maxM=8){
   const xyz=new Float32Array(c.w*c.h*3),rgb=new Uint8Array(c.w*c.h*3);let n=0;
   for(let v=0;v<c.h;v++)for(let u=0;u<c.w;u++){
     const i=v*c.w+u,z=c.depth[i]/1000;if(!(z>0&&z<=maxM))continue;
-    xyz[n*3]=z*(u-cx)/f;xyz[n*3+1]=z*(v-cy)/fy;xyz[n*3+2]=z;
+    const dx=c.offsets?(c.offsets[i]%k)/k:0,dy=c.offsets?Math.floor(c.offsets[i]/k)/k:0;
+    xyz[n*3]=z*(u+dx-cx)/f;xyz[n*3+1]=z*(v+dy-cy)/fy;xyz[n*3+2]=z;
     rgb[n*3]=c.bgr[i*3+2];rgb[n*3+1]=c.bgr[i*3+1];rgb[n*3+2]=c.bgr[i*3];n++;
   }
   return {n,f,xyz:xyz.subarray(0,n*3),rgb:rgb.subarray(0,n*3)};   // f: focal length of the point grid, px
 }
-// Draw points into an RGBA buffer (W*H*4) with a depth test. The view orbits a pivot on the
-// optical axis at the scene's median depth. view = {yaw, pitch, zoom}; angles in radians.
+function cloudPivot(pts){
+  if(!pts?.n)return null;
+  const depths=Float32Array.from({length:pts.n},(_,i)=>pts.xyz[i*3+2]);
+  depths.sort();
+  return depths[depths.length>>1];
+}
+
+// Rotate about a fixed point on the RGB optical axis. Guides and points use the same transform.
+function cloudProjection(view,pivot,W,H){
+  const cy=Math.cos(view.yaw),sy=Math.sin(view.yaw),cp=Math.cos(view.pitch),sp=Math.sin(view.pitch);
+  const dist=pivot*(view.zoom||1),f=W*0.75;
+  function transform(x,y,z,out){
+    z-=pivot;
+    const z1=-x*sy+z*cy;
+    out[0]=x*cy+z*sy;out[1]=y*cp-z1*sp;out[2]=y*sp+z1*cp+dist;
+    return out;
+  }
+  function screen(p){return [W/2+f*p[0]/p[2],H/2+f*p[1]/p[2]];}
+  function segment(a,b){
+    const p=transform(...a,[]),q=transform(...b,[]),near=0.05;
+    if(p[2]<near&&q[2]<near)return null;
+    if(p[2]<near||q[2]<near){
+      const [back,front]=p[2]<near?[p,q]:[q,p];
+      const t=(near-back[2])/(front[2]-back[2]);
+      back[0]+=t*(front[0]-back[0]);back[1]+=t*(front[1]-back[1]);back[2]=near;
+    }
+    return [screen(p),screen(q)];
+  }
+  return {f,transform,segment};
+}
+
 function renderCloud(pts,out,W,H,view){
   out.fill(0);for(let i=3;i<out.length;i+=4)out[i]=255;
   if(!pts||!pts.n)return 0;
-  const zs=Array.from({length:pts.n},(_,i)=>pts.xyz[i*3+2]).sort((a,b)=>a-b),pivot=zs[zs.length>>1];
-  const cyaw=Math.cos(view.yaw),syaw=Math.sin(view.yaw),cp=Math.cos(view.pitch),sp=Math.sin(view.pitch);
-  const dist=pivot*(view.zoom||1),f=W*0.75,zbuf=new Float32Array(W*H).fill(Infinity);let drawn=0;
+  const projection=cloudProjection(view,view.pivot??cloudPivot(pts),W,H);
+  const f=projection.f,pos=new Float64Array(3),zbuf=new Float32Array(W*H).fill(Infinity);
+  let drawn=0;
   for(let i=0;i<pts.n;i++){
-    const x=pts.xyz[i*3],y=pts.xyz[i*3+1],z=pts.xyz[i*3+2]-pivot;
-    const x1=x*cyaw+z*syaw,z1=-x*syaw+z*cyaw;
-    const y2=y*cp-z1*sp,z2=y*sp+z1*cp+dist;
+    projection.transform(pts.xyz[i*3],pts.xyz[i*3+1],pts.xyz[i*3+2],pos);
+    const x1=pos[0],y2=pos[1],z2=pos[2];
     if(z2<=0.05)continue;
     // Splat radius: half the on-screen spacing between neighbouring grid points at this
     // depth, so surfaces look closed at any canvas size without smearing far points.
     const px=Math.round(W/2+f*x1/z2),py=Math.round(H/2+f*y2/z2);
-    const r=pts.f?Math.max(1,Math.min(8,Math.ceil(0.5*f*pts.xyz[i*3+2]/(z2*pts.f)))):(z2<1.5?2:1);
+    const r=view.raw?0:pts.f?Math.max(1,Math.min(8,Math.ceil(0.5*f*pts.xyz[i*3+2]/(z2*pts.f)))):(z2<1.5?2:1);
     for(let dy=-r;dy<=r;dy++)for(let dx=-r;dx<=r;dx++){
       const qx=px+dx,qy=py+dy;if(qx<0||qy<0||qx>=W||qy>=H)continue;
       const q=qy*W+qx;if(z2>=zbuf[q])continue;zbuf[q]=z2;
@@ -605,11 +641,17 @@ function identityStatus(s,id){
   if(id===null||id===undefined||!d||d.target!==id)return null;
   // A green badge needs a decision made on exactly the frame shown, by this detector process.
   const current=d.frame_seq===s.frame?.seq&&d.frame_epoch===s.frame?.epoch&&d.instance===s.stats?.instance&&d.instance!==undefined;
-  if(d.state==='tracking'&&d.confirmed===true&&current)return {level:'ok',text:Number.isInteger(d.rebound_from)?'SAME PERSON · RE-FOUND (WAS #'+d.rebound_from+')':'SAME PERSON · CONFIRMED'};
+  if(!current||!Number.isInteger(d.frame_seq)||!d.frame_epoch||!d.instance)return {level:'warn',text:'WAITING FOR CURRENT IDENTITY'};
+  if(d.state==='tracking'&&d.confirmed===true)return {level:'ok',text:Number.isInteger(d.rebound_from)?'SAME PERSON · RE-FOUND (WAS #'+d.rebound_from+')':'SAME PERSON · CONFIRMED'};
   if(d.state==='ambiguous')return {level:'bad',text:'TWO PEOPLE LOOK ALIKE · SELECT AGAIN'};
   if(d.state==='expired'||d.state==='no_reference')return {level:'bad',text:'IDENTITY LOST · SELECT AGAIN'};
   if(d.state==='searching'||d.state==='confirming')return {level:'warn',text:'LOOKING FOR THE SELECTED PERSON'};
   return {level:'warn',text:'CHECKING IDENTITY'};
+}
+function identityAdvice(status){
+  if(status?.level==='bad')return status.text.startsWith('TWO PEOPLE')?'Two people look alike • select again':'Identity lost • select again';
+  if(status?.text==='WAITING FOR CURRENT IDENTITY')return 'Waiting for the camera’s current identity decision';
+  return 'Camera is checking that this is still the selected person';
 }
 // The PX4 lab as THE vehicle of this page while the link is on. null = link off (the page's
 // own illustration is the vehicle). With the link on there is never a fallback to the
@@ -626,14 +668,30 @@ function labControl(lab,session){
   if(typeof c.owner==='string')return c.owner===session?'mine':'other';
   return c.expired===true?'expired':'free';
 }
-function labView(on,lab,session=null){
+// Browser authority and FC telemetry describe different parts of the simulator.
+function labFlightStatus(lab,view,request){
+  const lease={mine:'Lab controls in this tab',other:'Lab controls in another tab',free:'No active tab',
+    expired:'Tab control expired',legacy:'Tab control unknown'};
+  const parts=[view?.contact?(lease[view.control]||'Tab control unknown'):'Tab control unknown'];
+  if(request)parts.push(request.name+' '+request.status);
+  if(!view?.fresh){parts.push('Aircraft state unknown');return parts.join(' · ');}
+  const nav={0:'Manual',1:'Altitude',2:'Position',4:'Loiter',5:'Return',14:'Offboard',17:'Takeoff',18:'Land'};
+  const mode=Number.isInteger(lab?.nav_state)?nav[lab.nav_state]||'mode '+lab.nav_state:'mode unknown';
+  const armed=lab?.armed===true?'armed':lab?.armed===false?'disarmed':'arming unknown';
+  const landed=lab?.landed_fresh!==true?'ground contact unverified':lab.landed===true?'on ground':lab?.landed===false?'in air':'ground contact unknown';
+  parts.push('PX4 reports '+mode+', '+armed+', '+landed);
+  if(Number.isFinite(view.altitude))parts.push(view.altitude.toFixed(1)+' m');
+  return parts.join(' · ');
+}
+function labView(on,lab,session=null,camera=null){
   if(!on)return null;
   if(!lab||typeof lab.phase!=='string')return {contact:false,mode:'NO CONTACT',style:'HOLD',reason:'No contact with the PX4 lab on this computer',detail:'Vehicle state unknown · movement commands disabled',scale:'PX4 LAB · NO CONTACT',kind:null,fresh:false,vehicle:null,target:null,targetId:null,altitude:null,airborne:null,control:null,lastCommand:null,applied:{gap:null,speed:null,limit:null},
     can:{takeoff:false,follow:false,circle:false,land:true,hold:true,auto:false}};
-  const grounded=lab.phase==='GROUND'&&lab.armed===false,flying=lab.phase==='FLYING';
+  const grounded=lab.phase==='GROUND'&&lab.armed===false&&lab.landed_fresh!==false&&lab.landed!==false,flying=lab.phase==='FLYING';
   const behavior=typeof lab.behavior==='string'?lab.behavior.toUpperCase():'HOLD';
   // An unknown phase (FAULT, or one this page has never heard of) is shown by its own name, never as take-off.
-  const mode=flying?behavior:grounded?'GROUND':(LAB_MODES[lab.phase]||(lab.phase==='GROUND'?'ARMED ON GROUND':lab.phase));
+  const followSuspended=flying&&behavior==='FOLLOW'&&(lab.requires_reselection===true||lab.lock_state!=='LOCKED'||lab.target_id==null);
+  const mode=flying?(followSuspended?'FOLLOW SUSPENDED':behavior):grounded?'GROUND':(LAB_MODES[lab.phase]||(lab.phase==='GROUND'?(lab.armed===true?'ARMED ON GROUND':'GROUND UNCONFIRMED'):lab.phase));
   // Missing is not fresh: movement and positions need the lab to say its PX4 telemetry is current.
   const fresh=lab.telemetry_fresh===true;
   const home=Array.isArray(lab.home)&&lab.home.length===2&&lab.home.every(finite)?lab.home:[0,0];
@@ -645,23 +703,39 @@ function labView(on,lab,session=null){
   const source=kind==='fixed_stereo'?(lab.accept_preview_stereo_in_simulation===true?'stereo distance (unvalidated)':'stereo distance NOT accepted by the lab')
     :kind==='mono_estimate'?(lab.mono_estimate?.accepted===true?'one-lens estimate · schematic, not measured':'one-lens estimate NOT accepted by the lab'):kind==='pi_onboard'?'on-drone camera · open-loop simulation':'lab source: '+kind;
   const scale=kind==='fixed_stereo'?'PX4 SITL · 1 m GRID · STEREO UNVALIDATED':kind==='mono_estimate'?'PX4 SITL · SCHEMATIC · NOT MEASURED':kind==='pi_onboard'?'PX4 SITL · 1 m GRID · HOME ORIGIN':'PX4 SITL · LAB\'S OWN SOURCE';
-  const altitude=finite(lab.altitude)?Math.max(0,lab.altitude):null;
+  const altitude=fresh&&finite(lab.altitude)?Math.max(0,lab.altitude):null;
   const hasTarget=lab.target_id!==null&&lab.target_id!==undefined&&!lab.requires_reselection;
   const control=labControl(lab,session),mayMove=control!=='other'&&fresh;
   let reason=lab.error||lab.reason||'';
-  if(!lab.error&&kind==='pi_onboard'&&/choose Nowhere|Sending to PC is off/.test(reason))reason='Ready for Follow. Select a person, take off, then press Follow.';
+  if(!lab.error&&kind==='pi_onboard'){
+    reason=reason.replace(/; choose Nowhere then PX4 on the PC again$/, '');
+    if(reason==='Sending to PC is off')reason=grounded?'Take off when ready. To follow, select a person and press Follow.':'To follow, select a person and press Follow.';
+  }
+  // Older labs publish only a generic identity hold. Qualify it with the camera's
+  // latest decision only for the same source, detector and target.
+  if(!lab.error&&reason==='Camera is checking that this is still the selected person • hold'){
+    const sameSource=camera?.frame?.epoch&&camera.frame.epoch===lab.frame?.epoch&&
+      camera.stats?.instance&&camera.stats.instance===lab.source_instance;
+    const status=sameSource?identityStatus(camera,lab.target_id):null;
+    reason=lab.requires_reselection?'PX4 holding • select again':
+      status?.level==='ok'?'PX4 holding • waiting for lab confirmation':
+      status?'PX4 holding • '+identityAdvice(status):'PX4 holding • awaiting current identity data';
+  }
   if(!fresh)reason='PX4 telemetry is not fresh · movement commands disabled'+(reason?' · '+reason:'');
   if(control==='other')reason='View only · another display controls the PX4 lab'+(reason?' · '+reason:'');
-  else if(control==='expired')reason='This page\'s control lapsed · the lab is holding · press a command to take control again';
+  else if(control==='expired'){
+    const leaseReason='Tab control lapsed · an explicit flight request is required';
+    reason=reason&&reason!=='Browser control lease expired; explicitly resume'?leaseReason+' · '+reason:leaseReason;
+  }
   const lc=lab.control?.last_command;
-  return {contact:true,mode,style:['GROUND','TAKEOFF','LAND','FOLLOW','CIRCLE','HOLD'].includes(mode)?mode:'HOLD',
+  return {contact:true,mode:fresh?mode:'UNKNOWN',style:fresh&&['GROUND','TAKEOFF','LAND','FOLLOW','CIRCLE','HOLD'].includes(mode)?mode:'HOLD',
     reason,detail:'PX4 SITL · '+(altitude===null?'—':altitude.toFixed(1)+' m')+' · '+source,scale,kind,
-    vehicle:pos?{...toMap(pos[0],pos[1]),heading}:null,target:tgt,targetId:lab.target_id??null,altitude,airborne:!grounded,behavior,control,fresh,
+    vehicle:pos?{...toMap(pos[0],pos[1]),heading}:null,target:fresh?tgt:null,targetId:lab.target_id??null,altitude,airborne:fresh?!grounded:null,behavior,control,fresh,
     lastCommand:lc&&typeof lc==='object'?lc:null,
     // What the lab says it applies; the page's sliders are only requests.
     applied:{gap:finite(lab.gap)?lab.gap:null,speed:finite(lab.speed)?lab.speed:null,limit:finite(lab.limit)?lab.limit:null},
     // auto: whether the page may send its unasked housekeeping commands (source, selection).
-    can:{takeoff:mayMove&&grounded,follow:mayMove&&flying&&(hasTarget||kind==='pi_onboard'),circle:mayMove&&flying&&hasTarget&&kind!=='pi_onboard',land:!grounded,hold:!grounded,auto:control==='mine'||control==='free'||control==='legacy'}};
+    can:{takeoff:mayMove&&grounded,follow:mayMove&&flying&&(hasTarget||kind==='pi_onboard'),circle:mayMove&&flying&&hasTarget&&kind!=='pi_onboard',land:!fresh||!grounded,hold:!fresh||!grounded,auto:control==='mine'||control==='free'||control==='legacy'}};
 }
 // Switching the link off must not leave a flying simulated vehicle following with nobody
 // watching it: ask for hold, and unlink only when a state RECEIVED AFTER the request reports
@@ -735,6 +809,6 @@ class MapFit{
   }
   reset(){this.cur=null;this.smaller={};}
 }
-const api={mountOf,onboardView,transmitView,recognise,validPeople,cleanName,depthViews,capabilities,rangeReadout,identityStatus,labView,labControl,labSourceFor,Unlinker,MapFit,cameraLabel,adoptIdentity,TargetSync,LabLink,Flight,ReturnMatcher,similarity,distance,stereo,stereoPoint,StereoRange,PositionSource,LiveGate,LiveDisplay,decodeCloud,cloudPoints,renderCloud,homography,project,inside};
+const api={labFlightStatus,mountOf,onboardView,transmitView,recognise,validPeople,cleanName,depthViews,capabilities,rangeReadout,identityStatus,labView,labControl,labSourceFor,Unlinker,MapFit,cameraLabel,adoptIdentity,TargetSync,LabLink,Flight,ReturnMatcher,similarity,distance,stereo,stereoPoint,StereoRange,PositionSource,LiveGate,LiveDisplay,decodeCloud,cloudPoints,cloudPivot,cloudProjection,renderCloud,homography,project,inside};
 if(typeof module!=='undefined')module.exports=api;root.Garuda=api;
 })(typeof globalThis!=='undefined'?globalThis:this);

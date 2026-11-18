@@ -10,6 +10,7 @@ from fc_gate import FcGate, FcLink
 from .test_live_onboard import snapshot as live_snapshot
 
 ADDR = ("10.0.0.5", 14580)
+SIM_ADDR = ("127.0.0.1", 14580)
 
 
 def snap(seq=1, generation=0, request="off", camera="cm3"):
@@ -219,8 +220,8 @@ def test_grant_needs_offboard_first_and_ends_when_offboard_ends():
     assert g.step(snap(5, 3, "fc_hold"), 50, 50, FC)["state"] == "holding"
     assert g.step(snap(6, 4, "fc"), 50, 50, FC)["state"] == "sending"
     out = g.step(snap(7, 4, "fc"), 50, 50, MANUAL)                        # pilot took over
-    assert out["stream"] and out["forward_vel"] == 0 and out["yaw_rate"] == 0 and "left offboard" in out["reason"]
-    assert g.step(snap(8, 4, "fc"), 50, 50, FC)["state"] == "holding"
+    assert not out["stream"] and out["forward_vel"] == 0 and out["yaw_rate"] == 0 and "left offboard" in out["reason"]
+    assert not g.step(snap(8, 4, "fc"), 50, 50, FC)["stream"]
 
 
 @pytest.mark.parametrize("change,why", [
@@ -288,12 +289,12 @@ def setpoints(sock):
     return out
 
 
-def bridge(sysid=4, host="10.0.0.5", **kw):
+def bridge(sysid=4, host=SIM_ADDR[0], **kw):
     s, c = Sock(), Clock()
     return s, c, Bridge(s, sysid, host, clock=c, **kw)
 
 
-def feed(s, c, sysid=4, address=ADDR, **kw):
+def feed(s, c, sysid=4, address=SIM_ADDR, **kw):
     s.inbox += [(px4(sysid=sysid, **kw), address), (attitude(int(c.t * 1000), sysid=sysid), address)]
 
 
@@ -320,7 +321,7 @@ def test_tick_sends_nothing_until_a_session_then_zero_then_the_command():
     assert out["fc"] == {"sysid": 4, "offboard": True, "armed": True} and out["state"] == "ready" and s.sent == []
     assert out["reason"].startswith("SIMULATOR: ")
     out = run(b, s, c, snap(2, 1, "fc_hold"))
-    assert out["state"] == "holding" and setpoints(s) == [(0.0, 0.0, 0.0, 0.0, 1479, 4, 1, 8, ADDR)]
+    assert out["state"] == "holding" and setpoints(s) == [(0.0, 0.0, 0.0, 0.0, 1479, 4, 1, 8, SIM_ADDR)]
     assert sum(int.from_bytes(d[7:10], "little") == mav.HEARTBEAT for d, _ in s.sent) == 1
     out = run(b, s, c, snap(3, 2, "fc"))
     assert out["state"] == "sending" and setpoints(s)[-1][:2] == (.3, .2) and out["setpoints_sent"] == 2
@@ -379,7 +380,7 @@ def flooded(b, c, step):
 
         def recvfrom(self, n):
             Flood.calls += 1; c.t += step
-            return px4(sysid=4) + attitude(int(c.t * 1000), sysid=4), ADDR
+            return px4(sysid=4) + attitude(int(c.t * 1000), sysid=4), SIM_ADDR
     old = b.sock; b.sock = f = Flood(); f.sent = old.sent
     return Flood
 
@@ -427,6 +428,7 @@ def test_receive_only_never_sends_and_never_reports_sending():
 # ---- start-up refusal and the status report --------------------------------------------------
 class Args:
     def __init__(self, simulator=False, real=False, host="127.0.0.1", sysid=4, listen="127.0.0.1:14543"):
+        self.receive_only = True
         self.simulator, self.real_flight_controller, self.fc_host, self.fc_sysid, self.listen = simulator, real, host, sysid, listen
 
 
@@ -670,7 +672,7 @@ def test_missing_camera_cannot_hide_offboard_exit():
     g = granted()
     g.step(None, None, None, MANUAL, None, 10)
     assert g.grant is None
-    assert g.step(snap(5, 2, "fc"), 50, 50, FC, None, 10.1)["state"] == "holding"
+    assert not g.step(snap(5, 2, "fc"), 50, 50, FC, None, 10.1)["stream"]
 
 
 @pytest.mark.parametrize("boundary", ["target", "epoch", "source", "limit", "mount", "sequence"])
@@ -685,3 +687,62 @@ def test_invalid_camera_cannot_hide_known_boundary(boundary):
     g.step(bad, 50, 50, FC, None, 10)
     assert g.grant is None
     assert g.step(snap(5, 2, "fc"), 50, 50, FC, None, 10.1)["state"] == "holding"
+
+@pytest.mark.parametrize("interruption", [dict(armed=False), dict(offboard=False)])
+@pytest.mark.parametrize("paused", [False, True])
+def test_transient_authority_loss_in_same_receive_batch_stops_all_packets(interruption, paused):
+    sock, clock, bridge = flying()
+    if paused:
+        run(bridge, sock, clock, invalid(4))
+        assert bridge.gate.paused is not None
+    packets = len(sock.sent)
+    feed(sock, clock, **interruption)
+    out = run(bridge, sock, clock, snap(4, 3, "fc_hold"))
+    assert out["fc"]["armed"] and out["fc"]["offboard"]  # latest heartbeat recovered
+    assert not out["stream"] and len(sock.sent) == packets
+    for seq, gen, request in [(5, 3, "fc_hold"), (6, 4, "fc")]:
+        assert not run(bridge, sock, clock, snap(seq, gen, request))["stream"]
+    assert len(sock.sent) == packets
+
+
+def test_disarmed_follow_press_cannot_grant_on_rearm():
+    disarmed = dict(FC, armed=False)
+    gate = streaming(disarmed)
+    assert gate.step(snap(3, 2, "fc"), 50, 50, disarmed)["state"] == "holding"
+    assert gate.grant is None
+    assert gate.step(snap(4, 2, "fc"), 50, 50, FC)["forward_vel"] == 0
+
+
+def test_real_endpoint_rejected_before_opening_sockets_and_sim_requires_literal_loopback():
+    from fc_bridge import main
+    with pytest.raises(SystemExit, match="Only --receive-only"):
+        main(["--real-flight-controller", "--fc-host", "192.0.2.1", "--fc-sysid", "4",
+              "--listen", "0.0.0.0:0"], {"GARUDA_FC_BRIDGE": "1"})
+    with pytest.raises(SystemExit, match="loopback"):
+        endpoint_kind(Args(simulator=True, host="127.example.test"), {"GARUDA_SIM": "1"})
+
+def test_direct_bridge_to_non_loopback_remains_silent_with_valid_requests():
+    sock, clock, observer = bridge(host=ADDR[0])
+    for seq, request in enumerate(("off", "fc_hold", "fc", "off", "fc_hold", "fc"), 1):
+        out = run(observer, sock, clock, snap(seq, seq, request), address=ADDR)
+        assert out["fc"]["offboard"] and out["fc"]["armed"]
+        assert not out["stream"] and out["state"] != "sending"
+    assert sock.sent == []
+
+def test_hold_request_first_seen_after_stall_is_consumed_without_reopening_stream():
+    sock, clock, bridge = flying()
+    before = len(sock.sent)
+    assert not run(bridge, sock, clock, snap(4, 3, "fc_hold"), dt=.4)["stream"]
+    assert not run(bridge, sock, clock, snap(5, 3, "fc_hold"))["stream"]
+    assert not run(bridge, sock, clock, snap(6, 4, "fc"))["stream"]
+    assert len(sock.sent) == before
+
+def test_paused_old_generation_cannot_resume_after_batched_disarm_and_rearm():
+    sock, clock, bridge = flying()
+    run(bridge, sock, clock, invalid(4))
+    before = len(sock.sent)
+    feed(sock, clock, armed=False)
+    for seq in range(5, 10):
+        out = run(bridge, sock, clock, snap(seq, 2, "fc"))
+        assert not out["stream"] and bridge.gate.grant is None
+    assert len(sock.sent) == before

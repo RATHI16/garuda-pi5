@@ -44,10 +44,10 @@ forward displacement0.08–0.8m/cross-axis<=0.3m. These are PX4 estimates, not i
 simulator ground truth; compare ULog groundtruth separately when interpreting results.
 
 Perception identity/missing/frozen faults must zero the yaw channel within450ms; markers
-are logged before ticking. Zeros must continue, with no old-grant recovery. A300ms loop
+are logged before ticking. The fault stays present for a further 5.5 s. Recovery after this deadline must never revive the prior grant. A300ms loop
 pause must end the session and produce no packets after resumption; .25s silent observation
 is followed by a NEW explicit hold session and explicit Offboard request before continuing.
-Mode exit uses AUTO/LOITER, then explicit Offboard; old follow grant must remain gone.
+Mode exit uses AUTO/LOITER. The stream must go silent. A new hold session allows the next explicit Offboard request. The old Follow grant must remain gone.
 
 The FINAL fault suppresses ATTITUDE only, while HEARTBEAT and scoring telemetry continue.
 The first stopped state must be reached by350ms observation (300ms liveness+50ms tick).

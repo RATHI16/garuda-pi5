@@ -168,3 +168,34 @@ it does not solve sparse coverage, cross-pixel occlusion or prediction reliabili
 on recorded disparities. Explicit translation scale is required for the calibration
 file, and any changed output pixel fails the run. Timings are isolated kernel timings,
 not live detector/stereo throughput or accuracy measurements.
+
+### Comparing the depth views
+
+The inset, expanded inspector and 3D viewer report distinct pairs drawn in the last
+four seconds. The age bound follows the paired RGB timestamp through the HTTP request
+and decode. RGB detection has its own counter. In 3D the one-metre guide is at lens
+height in RGB optical coordinates. Its lines overlay visible surfaces. Double-click
+to recenter the orbit on the current scene.
+
+On the bench PC, use a Python environment with Playwright and Chrome. Keep the same
+scene, selection, fan placement and display settings for the whole comparison. Close
+other viewers. Reserve the bench with the other operators. Use your own Pi hostname and a new output directory for each run.
+
+```sh
+read -r -p "Pi hostname or IP: " PI_HOST
+python bench/oak_depth_views.py --pi "garuda@$PI_HOST" --base "http://$PI_HOST:8098" --seconds 30 --out /tmp/oak-views-01
+```
+
+The tool opens RGB, inset, expanded, Fine 3D and Full 3D in forward and reverse order.
+Each cloud phase keeps the original RGB tab open. It records actual browser status,
+detector completions, host depth completions, CPU, temperature and throttle flags.
+Use both repeats, check that pairs appeared, and retain any partial run. A workload
+that never produced a pair cannot establish the cost of a functioning view. Thermal
+limits use the existing host stereo bench policy above.
+
+For distance checks, use **Calibration → Camera → Depth at measured distances**.
+Mount the board flat. Record the tape reference and measure each placement with
+the board facing the camera. Capture near, middle and far setup views, then move
+the board again and make independent validation captures. Compare the held-out
+board medians and valid-pixel fractions with their tape readings. Record misses too.
+Validating the selected-person readout also requires separate person recordings.

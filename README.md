@@ -1,39 +1,21 @@
 # garuda-pi5 — Garuda SDK bench tier (Raspberry Pi 5 + Hailo-10H)
 
-## New: camera, stereo and flight-lab preview — 16 November 2026
+## Test the 18 November 2026 source preview
 
-**Start here: [What’s new and how to use it](docs/WHATS_NEW_2026-11.md)** ·
-[Release notes and validation limits](docs/RELEASE_2026-11-16.md) ·
-[Demo setup guide](docs/DEMO_USER_GUIDE.md)
+**[Start here: choose a test for your equipment](docs/TESTING_2026-11-18.md).** The guide includes commands, expected results and the evidence to keep. Use tag `v2026.11.18-preview.1` to reproduce this release.
 
-This update adds:
+| Try this | What to look for |
+|---|---|
+| [Offline checks](docs/TESTING_2026-11-18.md#1-get-the-release-and-run-the-offline-tests) | Run the browser-logic tests on a laptop. Exercise board processing with synthetic camera images. |
+| [OAK depth and 3D](docs/TESTING_2026-11-18.md#3-check-paired-depth-and-3d) | Inspect RGB and depth from the same capture, see the age and displayed-pair rate, and close the inspector to return to RGB. |
+| [Board and tape measurements](hosts/pi5/demo/chennai/OPERATOR.md) | Print a [checked A4 target](hosts/pi5/demo/chennai/oak-targets-a4.pdf), measure the pitch and distances, and export independent validation results. |
+| [PX4/Gazebo rehearsal](docs/TESTING_2026-11-18.md#5-rehearse-the-gui-in-gazebo) | See who has control, which action was requested, and which mode, arming state and ground contact PX4 actually reports. |
 
-- **OAK-D Pro host stereo:** camera capture/H.265 on the OAK, stereo matching on the Pi,
-  detection on Hailo; selected-person distance, depth view and 3D preview.
-- **Shared OAK / CM3 / USB profiles:** one code base, capability-aware views, fixed-camera
-  or on-drone placement. CM3 still needs a first run on this release.
-- **Person identity and face tools:** appearance re-identification, visible identity state,
-  opt-in browser-local named faces and face-confirmed return.
-- **Unified controls:** camera placement and destination, Take off / Follow / Hold / Land,
-  restored gesture/face/sliders, larger video and compact advanced settings.
-- **PX4/Gazebo testing:** simulated-camera closed loop, live-camera input, command monitor,
-  control leases and a bounded bench yaw trial (3 seconds or 30° then Hold).
-- **Explicit sending and MAVLink bridge:** request-bound hold/follow, freshness/identity
-  checks, fault rehearsal tools, recording and team bring-up documentation.
+The OAK supplies images and optional H.265 video. Host stereo runs on the Pi and the detector runs on Hailo. The unified GUI controls the page simulation or laptop PX4. Physical FC connections in this release are receive-only. Camera accuracy depends on measurements from the installed rig.
 
-**This is a source preview, not a flight-approved release.** Stereo is uncalibrated;
-mono depth is an estimate. The new bounded yaw limit has offline controller-path tests
-and grounded installation checks, not a completed airborne validation run. The revised
-settled-handover/±0.20 m altitude rehearsal remains unrun. No real flight controller has
-been contacted by this work. Real-vehicle mode in the unified UI remains unavailable.
-
-Open `http://<pi-address>:8098/demo` after installing/configuring the Pi software.
-The laptop lab is `http://127.0.0.1:8099`. **Pulling this repository does not deploy it**
-or install models/vendor packages. Keep the previous deployment for rollback and follow
-the setup guide; the older installer assets have not been rebuilt for this preview.
+[Release notes and test evidence](docs/RELEASE_2026-11-18.md) · [Installation guide](docs/DEMO_USER_GUIDE.md) · [Full feature guide](docs/WHATS_NEW_2026-11.md)
 
 ---
-
 
 Development bench for **Garuda**, a companion-computer autonomy stack for drones and
 robotics. This repo is the **bench/dev tier**: a Raspberry Pi 5 with a Hailo-10H AI
@@ -43,9 +25,7 @@ the harnesses, calibration tooling and datasets used to measure all of it. Servi
 written host-agnostic so they later port to a Hailo-15 SoM (product tier).
 
 The flight controller (a Microchip PIC32CZ CA90 running PX4) is a **separate device**
-reached over Ethernet. Hard real-time control never runs on this machine. The isolated SITL controller can arm
-the simulated vehicle. The separate MAVLink bridge has an explicitly gated real-FC path;
-that path is not validated on hardware and is not enabled by the unified UI.
+reached over Ethernet. Hard real-time control never runs on this machine. The isolated SITL controller can arm the simulated vehicle. The Ethernet bridge in this preview accepts physical FC telemetry in receive-only mode.
 
 > **Earlier provenance:** Public repository, updated 2026-11-01 from the garuda-sdk-bench development
 > branches — Pi baseline `feat/portal-tracking` @ `99db1c5`, PC flight lab `feat/px4-gazebo-demo`
@@ -62,7 +42,7 @@ that path is not validated on hardware and is not enabled by the unified UI.
 
 ## Testing installer release
 
-For other users, start with the [testing release installer guide](release/README.md).
+For the older installer distribution, see the [installer guide](release/README.md). For the current source preview, follow the [tester guide](docs/TESTING_2026-11-18.md).
 The prerelease includes an Ubuntu 24.04 x86_64 installer binary, a source/setup kit,
 checksums and a generated replay sample. It automates PC dependencies and checks
 Pi packages/models; vendor Hailo packages and the custom depth artifact remain

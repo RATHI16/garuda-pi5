@@ -186,7 +186,7 @@ test('display: a detector restart needs reselection; an unconfirmed camera ident
  f.receive(snap(1),0);f.select(7,0);for(let n=0;n<=30;n++){f.receive(snap(n+2),n*50);f.step(.05,n*50,(t,s)=>project(t,s,null));}
  assert.equal(f.mode,'FOLLOW');
  f.receive(snap(40,{stats:{instance:'proc',identity:{target:7,confirmed:false}}}),1600);let o=f.step(.05,1600,(t,s)=>project(t,s,null));
- assert.equal(o.point,undefined);assert.match(f.reason,/checking that this is still the selected person/);
+ assert.equal(o.point,undefined);assert.match(f.reason,/current identity decision/);
  f.receive(snap(41,{stats:{instance:'restarted'}}),1650);o=f.step(.05,1650,(t,s)=>project(t,s,null));
  assert.equal(f.requiresSelection,true);assert.match(f.reason,/select again/);});
 
@@ -206,3 +206,16 @@ test('two enrolled people who score alike give no name; re-enrolling a name repl
   assert.equal(recognise(validPeople([{name:'Asha',samples:[appearance()]},{name:'Ravi',samples:[appearance(4)]}]),{embedding:appearance(4),age_ms:100}),'Ravi');
   assert.deepEqual(validPeople([{name:'<b>x</b>\n'+'y'.repeat(60),samples:[appearance()]},{name:'',samples:[appearance()]},{name:'Bad',samples:[[1,2]]},null]).map(p=>p.name.length),[24]);
   const f=enrolled();f.select?.(7,3000);f.enroll('asha');for(let i=0;i<3;i++){const s=snapshot(i+60);s.tracks[0].face={embedding:appearance(),sample:'again'+i,age_ms:100};f.receive(s,12000+i*800);}assert.deepEqual(f.people.map(p=>p.name),['asha']);});
+
+test('GCL3 projects the original measured pixel and rejects offsets outside the image',()=>{
+ const geometry={schema_version:1,epoch:'run',calibration_id:'factory',width:3,height:2,
+   fx:4,fy:8,cx:1,cy:1,distortion:'none',source:'host-opencv-factory-calibration',reference_frame:'unverified',verified:false};
+ const header=Buffer.from(JSON.stringify({geometry,step:2,width:2,height:1}));
+ const wire=Buffer.alloc(8+header.length+12);
+ wire.write('GCL3');wire.writeUInt32LE(header.length,4);header.copy(wire,8);
+ wire.writeUInt16LE(2000,8+header.length);wire[wire.length-2]=3;
+ const decode=()=>Garuda.decodeCloud(wire.buffer.slice(wire.byteOffset,wire.byteOffset+wire.length));
+ assert.deepEqual([...Garuda.cloudPoints(decode()).xyz],[0,0,2]);
+ wire[wire.length-1]=1;
+ assert.equal(decode(),null);
+});

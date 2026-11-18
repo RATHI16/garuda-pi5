@@ -7,6 +7,7 @@ import shutil
 import signal
 import time
 from lab_processes import identity
+import qgc_link_history
 import subprocess
 import sys
 import threading
@@ -170,7 +171,7 @@ class HTTP(BaseHTTPRequestHandler):
             self.send_header('Vary', 'Origin')
         self.send_header('Content-Length', str(len(data))); self.end_headers(); self.wfile.write(data)
     def camera_origin(self):
-        return self.headers.get('Origin') == config().get('pi_url') and self.path in ('/api/lab/start', '/api/lab')
+        return self.headers.get('Origin') == config().get('pi_url') and self.path in ('/api/lab/start', '/api/lab', '/api/lab/qgc-link')
     def do_OPTIONS(self):
         host = self.headers.get('Host', '')
         if host not in (f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}') or not self.camera_origin():
@@ -189,6 +190,9 @@ class HTTP(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.trusted(): return self.reply(403, {'error':'Local requests only'})
         if self.path=='/': return self.reply(200, (ROOT/'hosts/pc/demo.html').read_bytes(), 'text/html; charset=utf-8')
+        if self.path=='/api/lab/qgc-link':
+            try: return self.reply(200, {'events': qgc_link_history.history()})
+            except (ValueError, OSError) as exc: return self.reply(503, {'error': str(exc)})
         if self.path=='/api/lab':
             c=config();return self.reply(200,dict(config=c,components=components(),missing=missing(c),message=MESSAGE))
         self.proxy()

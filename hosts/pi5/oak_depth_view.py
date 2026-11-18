@@ -25,13 +25,32 @@ def _lut():
 LUT = _lut()
 
 
+def observed_cells(depth_mm, step):
+    """Pick the first measured pixel in each cell, retaining its row-major offset."""
+    h, w = depth_mm.shape
+    if step == 1 or not depth_mm.size:
+        grid = depth_mm[::step, ::step]
+        return grid, np.zeros_like(grid, dtype=np.uint8)
+    sy, sx = min(step, h), min(step, w)
+    # Preserve partial cells around the bottom and right image boundaries.
+    if h % sy or w % sx:
+        depth_mm = np.pad(depth_mm, ((0, -h % sy), (0, -w % sx)))
+    rows, cols = depth_mm.shape[0] // sy, depth_mm.shape[1] // sx
+    cells = depth_mm.reshape(rows, sy, cols, sx).transpose(0, 2, 1, 3).reshape(rows, cols, -1)
+    offsets = np.argmax(cells != 0, axis=2)
+    depths = np.take_along_axis(cells, offsets[:, :, None], axis=2)[:, :, 0]
+    if sx != step:
+        offsets = offsets // sx * step + offsets % sx
+    return depths, offsets
+
+
 def colourise(depth_mm, max_mm=6000, step=2):
     """HxW uint16 mm (0 = no depth) -> (H/step)x(W/step)x3 uint8 BGR."""
     if not isinstance(depth_mm, np.ndarray) or depth_mm.ndim != 2 or depth_mm.dtype != np.uint16:
         raise ValueError("depth_mm must be a 2-D uint16 array of millimetres")
     if not (isinstance(step, int) and step >= 1) or not max_mm > 0:
         raise ValueError("step must be a positive integer and max_mm positive")
-    d = depth_mm[::step, ::step]
+    d = depth_mm if step == 1 else observed_cells(depth_mm, step)[0]
     idx = np.minimum(d.astype(np.uint32) * 255 // int(max_mm), 255).astype(np.uint8)
     out = LUT[idx]
     out[d > max_mm] = BEYOND_BGR
@@ -81,3 +100,21 @@ def cloud_payload(depth_mm, thumb_bgr, step=8, geometry=None):
         return b'GCL2'+struct.pack('<I',len(header))+header+d.tobytes()+np.ascontiguousarray(thumb_bgr).tobytes()
     return CLOUD_MAGIC + int(w).to_bytes(2, "little") + int(h).to_bytes(2, "little") \
         + d.tobytes() + np.ascontiguousarray(thumb_bgr).tobytes()
+
+
+def observed_cloud_payload(depth_mm, rgb, step, geometry):
+    """GCL3 carries a pixel offset per cell in addition to GCL2's depth and BGR."""
+    if step not in (2, 4, 8) or depth_mm.dtype != np.uint16 or depth_mm.ndim != 2:
+        raise ValueError("invalid depth grid or cloud step")
+    if rgb.shape != depth_mm.shape + (3,) or rgb.dtype != np.uint8:
+        raise ValueError("colour and depth grids differ")
+    d, offsets = observed_cells(depth_mm, step)
+    h, w = d.shape
+    y = np.arange(h)[:, None] * step + offsets // step
+    x = np.arange(w)[None, :] * step + offsets % step
+    header = json.dumps(dict(geometry=geometry, step=step, width=w, height=h),
+                        allow_nan=False, separators=(',', ':')).encode()
+    if len(header) > 16384:
+        raise ValueError("cloud metadata too large")
+    return b''.join((b'GCL3', struct.pack('<I', len(header)), header, d.astype('<u2', copy=False).tobytes(),
+                     rgb[y, x].tobytes(), offsets.astype(np.uint8).tobytes()))

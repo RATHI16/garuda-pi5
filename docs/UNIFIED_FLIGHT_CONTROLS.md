@@ -1,5 +1,7 @@
 # Unified camera flight controls
 
+To test these controls, use the [step-by-step simulator rehearsal](TESTING_2026-11-18.md#5-rehearse-the-gui-in-gazebo).
+
 The Pi demo now has one setup strip: active camera, Fixed camera / On drone placement,
 and Page simulation / PX4 on this laptop destination. Start PX4 lab connects the existing
 controller or asks the loopback launcher on port8100 to start it. The normal flight controls
@@ -42,3 +44,9 @@ The subsequent ground-only install/check is recorded in the 2026-11-16 benchlog.
 After that session is restored and released, install page assets plus mono_demo route update
 and restart the laptop launcher/controller from the reviewed checkout while grounded. Run a
 bounded simulator rehearsal before treating the changed page as live-validated.
+
+## FC evidence beside the simulator controls
+
+The setup strip shows the browser control lease, the last flight request made by this tab and fresh PX4 mode, arming, ground contact and altitude. A queued Land request and an FC report of landing appear independently. A lost HTTP response leaves delivery unknown. A fresh landing report expires after two seconds. Older lab versions show ground contact as unverified. If pose or vehicle status expires the page clears the aircraft state and altitude. A reload observes the lab with a new session ID.
+
+The physical bridge in this revision requires receive-only mode. Simulator grants expire on disarm or exit from Offboard, including transitions inside one UDP receive batch. A Follow press while disarmed cannot take effect on a later arm. Chennai records mounted-camera evidence independently of the ground-based FC evidence.

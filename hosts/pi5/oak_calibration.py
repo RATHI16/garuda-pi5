@@ -6,6 +6,7 @@ Candidate RGB intrinsics and held-out reprojection are NOT stereo distance calib
 """
 import argparse
 import base64
+import csv
 import hashlib
 import io
 import json
@@ -14,6 +15,8 @@ import os
 from pathlib import Path
 import re
 import threading
+from collections import Counter
+from statistics import median as sample_median
 import time
 from urllib.parse import urlsplit
 from urllib.request import urlopen
@@ -23,7 +26,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import cv2
 import numpy as np
 
-REVISION = 'calibration-workspace-v2-depth-guide'
+REVISION = 'calibration-workspace-v3-measured-tape'
+HANDOUTS = {
+    '/chennai/oak-targets-a4.pdf': 'application/pdf',
+    '/chennai/OPERATOR.md': 'text/plain; charset=utf-8',
+    '/chennai/CLAUDE_HANDOFF.md': 'text/plain; charset=utf-8',
+}
 MAX_CAPTURES = 60
 MAX_BYTES = 1024**3
 PATTERNS = ('checkerboard', 'circles', 'asymmetric_circles')
@@ -44,12 +52,21 @@ def setup(data):
         if not isinstance(value, str) or not value.strip() or len(value) > 200:
             raise ValueError(key+' is required (maximum 200 characters)')
         out[key] = value.strip()
+    mount = data.get('mount_context', 'unspecified')
+    if mount not in ('unspecified', 'bench', 'grounded_airframe'):
+        raise ValueError('choose a mount context')
+    mount_id = data.get('mount_id', '')
+    if not isinstance(mount_id, str) or len(mount_id) > 200:
+        raise ValueError('invalid mount label')
+    if mount == 'grounded_airframe' and not mount_id.strip():
+        raise ValueError('enter the airframe or mount revision for a mounted session')
+    out.update(mount_context=mount, mount_id=mount_id.strip())
     if data.get('pattern') not in PATTERNS: raise ValueError('unsupported pattern')
     if data.get('board_condition') not in ('rigid_flat', 'bent', 'unknown'):
         raise ValueError('record board condition')
     goal=data.get('goal','depth')
     if goal not in ('depth','lens','practice'): raise ValueError('choose a calibration task')
-    out.update(pattern=data['pattern'], board_condition=data['board_condition'], goal=goal, require_depth=True)
+    out.update(pattern=data['pattern'], board_condition=data['board_condition'], goal=goal, require_depth=True, require_measured_tape=(goal=='depth'))
     for key in ('columns', 'rows'):
         n = number(data.get(key), 2, 20, key)
         if int(n) != n: raise ValueError(key+' must be an integer')
@@ -115,18 +132,59 @@ def read_camera():
     return image, depth, provenance
 
 
-def depth_preview(depth):
-    # Fixed display scale only, not a depth-validity or measurement acceptance threshold.
-    scale=np.uint8(np.clip(depth.astype(np.float32)/6000,0,1)*255)
-    image=cv2.applyColorMap(255-scale,cv2.COLORMAP_TURBO)
-    image[depth==0]=0
-    return image
+def depth_preview(depth, step=1):
+    from oak_depth_view import colourise
+    return colourise(depth, step=step)
 
 
 def atomic_json(path, value):
     temp = path.with_suffix('.tmp')
     temp.write_text(json.dumps(value, indent=2, allow_nan=False)+'\n')
     os.replace(temp, path)
+
+
+def board_tape_report(session):
+    """One row per saved capture, preserving split, misses and unknown historic references."""
+    buf = io.StringIO(newline='')
+    writer = csv.writer(buf)
+    writer.writerow(('capture_id', 'split', 'sequence', 'tape_m', 'tape_measured',
+                     'tape_uncertainty_mm', 'board_median_m', 'board_valid_fraction',
+                     'board_minus_tape_m', 'comparison_status'))
+    checks = {'tune': [], 'validate': []}
+    counts = {'tune': Counter(), 'validate': Counter()}
+    for c in session['captures']:
+        board = c.get('board_depth') or {}
+        median, tape = board.get('median_m'), c.get('distance_m')
+        status = 'raw_reference_difference'
+        if session['config'].get('goal') != 'depth':
+            status = 'other_task'
+        elif session['config'].get('board_condition') != 'rigid_flat':
+            status = 'flatness_unconfirmed'
+        elif c.get('tape_measured') is not True or tape is None:
+            status = 'tape_unconfirmed'
+        elif not c.get('pattern_found'):
+            status = 'pattern_missing'
+        elif not c.get('has_depth') or median is None:
+            status = 'board_depth_missing'
+        difference = round(median-tape, 6) if status == 'raw_reference_difference' else None
+        counts[c['split']][status] += 1
+        if difference is not None:
+            checks[c['split']].append(difference)
+        writer.writerow((c['id'], c['split'], c.get('sequence'), tape, c.get('tape_measured'),
+                         c.get('tape_uncertainty_mm'), median, board.get('valid_fraction'),
+                         difference, status))
+    report = {'session_id': session['id'], 'tape_reference': session['config'].get('tape_reference'),
+              'mount_context': session['config'].get('mount_context', 'unspecified'),
+              'mount_id': session['config'].get('mount_id', ''), 'quantity': 'Board median minus marked tape reference, in metres.',
+              'scope': 'Raw descriptive comparisons. Optical origin and depth axis remain unverified.',
+              'sets': {}}
+    for split, values in checks.items():
+        report['sets'][split] = dict(saved=sum(counts[split].values()), compared=len(values),
+                                     status_counts=counts[split],
+                                     median_signed_m=sample_median(values) if values else None,
+                                     median_absolute_m=sample_median(map(abs, values)) if values else None,
+                                     max_absolute_m=max(map(abs, values)) if values else None)
+    return buf.getvalue(), report
 
 
 class Workspace:
@@ -172,6 +230,18 @@ class Workspace:
         if not isinstance(note, str) or len(note)>500: raise ValueError('notes limited to 500 characters')
         if session['config'].get('goal') == 'depth' and distance is None:
             raise ValueError('measure and enter the tape distance before a depth-check capture')
+        measured = data.get('tape_measured')
+        if measured is not None and type(measured) is not bool:
+            raise ValueError('tape confirmation must be true or false')
+        if session['config'].get('require_measured_tape') and measured is not True:
+            raise ValueError('confirm you measured this placement with the tape')
+        if measured and distance is None:
+            raise ValueError('a confirmed tape reading needs a distance')
+        uncertainty = data.get('tape_uncertainty_mm')
+        if uncertainty is not None:
+            if measured is not True:
+                raise ValueError('uncertainty requires a measured tape reading')
+            uncertainty = number(uncertainty, .01, 1000, 'tape_uncertainty_mm')
         image, depth, meta = self.camera()
         if session['config'].get('require_depth') and depth is None:
             raise ValueError('no matching depth arrived; check stereo status and retry')
@@ -184,6 +254,8 @@ class Workspace:
         points = detect(image, session['config'])
         cid = uuid.uuid4().hex
         record = dict(id=cid, split=split, distance_m=distance, note=note,
+                      tape_measured=measured, tape_uncertainty_mm=uncertainty,
+                      capture_revision=REVISION, captured_utc=time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
                       sequence=meta['sequence'], provenance=meta, image_sha256=digest,
                       geometry_eligible=session['config']['board_condition']=='rigid_flat',
                       pattern_found=points is not None, points_px=points.tolist() if points is not None else None,
@@ -249,7 +321,7 @@ class Workspace:
             ok,b=cv2.imencode('.jpg',img,[cv2.IMWRITE_JPEG_QUALITY,75])
             if not ok:raise ValueError('preview encode failed')
             return 'data:image/jpeg;base64,'+base64.b64encode(b).decode()
-        result=dict(rgb=jpeg(image),depth=jpeg(depth_preview(depth)) if depth is not None else None,
+        result=dict(rgb=jpeg(image),depth=jpeg(depth_preview(depth, step=2)) if depth is not None else None,
                     depth_present=depth is not None,
                     depth_backend=meta.get('pair_metadata',{}).get('depth_backend','unknown'),
                     measurement_qualified=meta.get('pair_metadata',{}).get('measurement_qualified',False),
@@ -263,6 +335,9 @@ class Workspace:
     def export(self, sid):
         path=self.directory(sid); output=io.BytesIO()
         with zipfile.ZipFile(output,'w',compression=zipfile.ZIP_STORED) as z:
+            csv_data, report = board_tape_report(self.load(sid))
+            z.writestr('board-tape.csv', csv_data)
+            z.writestr('board-tape-summary.json', json.dumps(report, indent=2, allow_nan=False))
             for f in sorted(path.iterdir()):
                 if f.suffix in ('.json','.png','.jpg'):z.write(f,f.name)
         return output.getvalue()
@@ -280,6 +355,8 @@ def handler(workspace):
         def do_GET(self):
             p=urlsplit(self.path).path
             try:
+                if p in HANDOUTS:
+                    self.send(200,HANDOUTS[p],(assets/p[1:]).read_bytes());return
                 if p in ('/','/camera','/centre.js','/calibration.js','/calibration.css','/calibration-guide.js'):
                     name={'/':'calibration-centre.html','/camera':'calibration.html'}.get(p,p[1:]);mime={'.html':'text/html','.js':'text/javascript','.css':'text/css'}[Path(name).suffix]
                     self.send(200,mime,(assets/name).read_bytes());return

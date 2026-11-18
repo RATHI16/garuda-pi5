@@ -126,6 +126,8 @@ def owner_sample(diag):
     return {"epoch": diag.get("epoch"), "healthy": diag.get("healthy"), "error": diag.get("error"),
             "limits": diag.get("limits"), "pairing": diag.get("pairing"),
             "stereo_enabled": diag.get("stereo_enabled"),
+            "depth_processed": diag.get("depth_processed"), "depth_age_s": diag.get("depth_age_s"),
+            "stereo_compute_ms": diag.get("stereo_compute_ms"), "map_interval_ms": diag.get("map_interval_ms"),
             "imu": diag.get("imu"), "imu_enabled": diag.get("imu_enabled"),
             "video": diag.get("video"), "video_config": diag.get("video_config"),
             "streams": {n: {k: v.get(k) for k in ("samples", "sequence_gaps", "stale", "received_hz")}
@@ -379,7 +381,7 @@ def hold_stream(base, stop):
             stop.wait(1)
 
 
-def run(base, minutes, interval, out_dir, hold, owner_base=None):
+def run(base, minutes, interval, out_dir, hold, owner_base=None, on_sample=None):
     if not (num(minutes) and minutes > 0 and num(interval) and interval > 0):
         raise ValueError("minutes and interval must be finite and positive")
     out = Path(out_dir)
@@ -414,6 +416,8 @@ def run(base, minutes, interval, out_dir, hold, owner_base=None):
             rows.append(row)
             fh.write(json.dumps(row) + "\n")
             fh.flush()
+            if on_sample is not None:
+                on_sample(row)
             time.sleep(max(0.0, interval - (time.monotonic() - tick)))
     stop.set()
     summary = summarise(rows)

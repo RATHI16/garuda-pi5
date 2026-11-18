@@ -140,7 +140,12 @@ class DemoControl:
             self.target_id=identity['target'];self.reacquired=True;self.angle=None;self.last_velocity=(0.,0.)
         if identity and identity.get('target')==self.target_id and identity.get('confirmed') is not True:
             # The camera is not sure this track is still the selected person: no position, hold.
-            self.target=None;self.lock_state='LOST';self.reason='Camera is checking that this is still the selected person • hold';return None
+            self.target=None;self.lock_state='LOST'
+            state=identity.get('state')
+            if state=='ambiguous':self.reason='Two people look alike • select again'
+            elif state in ('expired','no_reference'):self.reason='Identity lost • select again'
+            else:self.reason='Camera is checking that this is still the selected person • hold'
+            return None
         t=next((t for t in s.get('tracks',[]) if t['id']==self.target_id),None)
         if mono or (stereo and not self.reacquire):
             # No appearance re-match here: a gap longer than the continuity limit ends the

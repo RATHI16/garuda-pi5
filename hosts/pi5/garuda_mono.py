@@ -788,13 +788,25 @@ def make_handler():
                     from oak_depth_view import colourise, draw_box
                     _oak["view_t"] = time.monotonic()    # keeps depth flowing while the view is open
                     from oak_stereo_state import view_selection
-                    with _lock:                          # outline only if it was measured on the pair shown
-                        latest = view_selection(_oak["store"], _state.get("stereo"), time.monotonic_ns())
+                    paired = parse_qs(urlparse(self.path).query).get("paired") == ["1"]
+                    with _lock:
+                        block = _state.get("stereo") or {}
+                        latest = view_selection(_oak["store"], block, time.monotonic_ns())
+                        if latest is not None:
+                            rgb = _oak["store"].rgb(latest[0]) if paired else None
+                            capture_ns = _oak["store"].get(latest[0])[1]["rgb"]["capture_host_ns"]
                     if latest is None:
                         self._send(503, "text/plain", b"no fresh depth frame"); return
                     view = colourise(latest[1], max_mm=6000, step=2)
                     if latest[2] is not None:
                         draw_box(view, latest[2], step=2)
+                    if paired:
+                        if rgb is None or rgb.shape[:2] != latest[1].shape:
+                            self._send(503, "text/plain", b"matching RGB unavailable"); return
+                        left = cv2.resize(rgb, (view.shape[1], view.shape[0]), interpolation=cv2.INTER_AREA)
+                        if latest[2] is not None:
+                            draw_box(left, latest[2], step=2)
+                        view = np.concatenate((left, view), axis=1)
                     ok, jpg = cv2.imencode(".jpg", view, [cv2.IMWRITE_JPEG_QUALITY, 80])
                     if not ok:
                         self._send(500, "text/plain", b"encode failed"); return
@@ -803,6 +815,9 @@ def make_handler():
                     self.send_header("Content-Length", str(len(jpg)))
                     self.send_header("Cache-Control", "no-store")
                     self.send_header("X-Stereo-Pair", f"{latest[0][0]}:{latest[0][1]}")
+                    self.send_header("X-Depth-Age-Ms", str((time.monotonic_ns()-capture_ns+999_999)//1_000_000))
+                    if paired and latest[2] is not None and block.get("status") == "ok":
+                        self.send_header("X-Depth-Z-M", str(block["z_m"]))
                     self.send_header("X-Stereo-Outline", "matched" if latest[2] is not None else "none")
                     self.end_headers()
                     self.wfile.write(jpg.tobytes())
@@ -811,18 +826,25 @@ def make_handler():
             elif p == "/stereo_cloud.bin":             # one pair's depth + colour on a coarse grid, for the 3-D view
                 sel = None
                 if (OAK_PAIR or OAK_BOX) and _oak["store"] is not None:
-                    from oak_depth_view import cloud_payload
+                    from oak_depth_view import cloud_payload, observed_cloud_payload
                     from oak_stereo_state import view_selection
                     _oak["view_t"] = time.monotonic()
+                    query = parse_qs(urlparse(self.path).query)
+                    step = {"2": 2, "4": 4}.get((query.get("step") or [""])[0], 8)
                     with _lock:
                         sel = view_selection(_oak["store"], _state.get("stereo"), time.monotonic_ns())
-                        step = {"2": 2, "4": 4}.get((parse_qs(urlparse(self.path).query).get("step") or [""])[0], 8)
-                        thumb = _oak["store"].thumb(sel[0], step) if sel is not None else None
-                        geometry = _oak["store"].get(sel[0])[1].get("geometry") if sel is not None else None
-                    if sel is None or thumb is None:
+                        rgb = _oak["store"].rgb(sel[0]) if sel is not None else None
+                        if sel is not None:
+                            meta = _oak["store"].get(sel[0])[1]
+                            geometry = meta.get("geometry")
+                            capture_ns = meta["rgb"]["capture_host_ns"]
+                    if sel is None or rgb is None:
                         self._send(503, "text/plain", b"no fresh depth frame"); return
                     try:
-                        body = cloud_payload(sel[1], thumb, step=step, geometry=geometry)
+                        if geometry and query.get("sampling") == ["observed"]:
+                            body = observed_cloud_payload(sel[1], rgb, step, geometry)
+                        else:
+                            body = cloud_payload(sel[1], rgb[::step, ::step], step=step, geometry=geometry)
                     except ValueError:
                         self._send(503, "text/plain", b"depth and colour grids differ"); return
                     self.send_response(200)
@@ -830,6 +852,7 @@ def make_handler():
                     self.send_header("Content-Length", str(len(body)))
                     self.send_header("Cache-Control", "no-store")
                     self.send_header("X-Stereo-Pair", f"{sel[0][0]}:{sel[0][1]}")
+                    self.send_header("X-Depth-Age-Ms", str((time.monotonic_ns()-capture_ns+999_999)//1_000_000))
                     self.end_headers()
                     self.wfile.write(body)
                 else:

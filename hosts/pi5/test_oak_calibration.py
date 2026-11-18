@@ -169,7 +169,7 @@ def test_new_depth_session_requires_tape_and_matching_depth(tmp_path):
     def rgb_only():
         i,d,m=camera();return i,None,m
     w.camera=rgb_only
-    with pytest.raises(ValueError,match='matching depth'):w.capture(s['id'],dict(split='tune',distance_m=2))
+    with pytest.raises(ValueError,match='matching depth'):w.capture(s['id'],dict(split='tune',distance_m=2,tape_measured=True))
     assert not w.load(s['id'])['captures']
 
 
@@ -184,3 +184,51 @@ def test_live_preview_pair_cache_and_depth_colour(tmp_path):
     assert a['rgb'].startswith('data:image/jpeg;base64,') and a['depth'].startswith('data:image/jpeg;base64,')
     assert a['valid_fraction']==1
     assert not depth_preview(np.zeros((2,2),np.uint16)).any()
+
+
+def test_export_separates_measured_readings_misses_and_legacy_values(tmp_path):
+    import csv
+    w=Workspace(tmp_path,Camera())
+    s=w.create(dict(CONFIG,goal='depth'))
+    data=dict(split='validate',distance_m=1.98,tape_measured=True,tape_uncertainty_mm=5)
+    with pytest.raises(ValueError,match='confirm'):
+        w.capture(s['id'],dict(data,tape_measured=False))
+    with pytest.raises(ValueError,match='confirmation'):
+        w.capture(s['id'],dict(data,tape_measured='true'))
+    with pytest.raises(ValueError,match='uncertainty'):
+        w.capture(s['id'],dict(data,tape_uncertainty_mm=float('nan')))
+    w.capture(s['id'],dict(data,split='tune',distance_m=2.05))
+    w.capture(s['id'],data)
+    w.camera.image[:]=0
+    s=w.capture(s['id'],dict(data,distance_m=2.2))
+    # Old sessions may contain a numeric distance with no measurement provenance.
+    historic=dict(s['captures'][1],id='historic',distance_m=.4)
+    historic.pop('tape_measured')
+    s['captures'].append(historic)
+    atomic_json(w.directory(s['id'])/'session.json',s)
+    with zipfile.ZipFile(io.BytesIO(w.export(s['id']))) as z:
+        rows=list(csv.DictReader(io.StringIO(z.read('board-tape.csv').decode())))
+        report=json.loads(z.read('board-tape-summary.json'))['sets']
+    assert [r['comparison_status'] for r in rows]==['raw_reference_difference','raw_reference_difference','pattern_missing','tape_unconfirmed']
+    assert [r['board_minus_tape_m'] for r in rows]==['-0.05','0.02','','']
+    assert rows[1]['tape_uncertainty_mm']=='5.0'
+    assert report['tune']['median_signed_m']==-.05
+    assert report['validate']['saved']==3 and report['validate']['compared']==1
+    assert report['validate']['median_absolute_m']==.02
+    s['config']['board_condition']='bent'
+    atomic_json(w.directory(s['id'])/'session.json',s)
+    with zipfile.ZipFile(io.BytesIO(w.export(s['id']))) as z:
+        held=json.loads(z.read('board-tape-summary.json'))['sets']['validate']
+        assert held['status_counts']=={'flatness_unconfirmed':3}
+        assert held['compared']==0 and held['max_absolute_m'] is None
+
+
+def test_airframe_session_requires_and_preserves_its_mount_revision(tmp_path):
+    w=Workspace(tmp_path,Camera())
+    with pytest.raises(ValueError,match='mount revision'):
+        w.create(dict(CONFIG,mount_context='grounded_airframe'))
+    s=w.create(dict(CONFIG,mount_context='grounded_airframe',mount_id='Rig A v2'))
+    with zipfile.ZipFile(io.BytesIO(w.export(s['id']))) as z:
+        summary=json.loads(z.read('board-tape-summary.json'))
+        assert (summary['mount_context'],summary['mount_id'])==('grounded_airframe','Rig A v2')
+        assert summary['sets']['validate']['median_absolute_m'] is None

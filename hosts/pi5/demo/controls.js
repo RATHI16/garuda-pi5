@@ -18,7 +18,7 @@ const flightActions=document.createElement('div');flightActions.className='fligh
 flightActions.innerHTML='<span id="airState">GROUNDED · SIMULATED</span><button id="takeoff" class="primary">Take off</button><button id="land">Land</button><button id="followTarget">Follow target</button><button id="circleTarget">Circle target</button>';
 document.querySelector('.flightPanel .actions').before(flightActions);
 $('takeoff').onclick=()=>F.takeoff();$('land').onclick=()=>F.land();
-$('followTarget').onclick=()=>F.setFlightStyle('follow');$('circleTarget').onclick=()=>F.setFlightStyle('circle');
+$('followTarget').onclick=()=>{F.setFlightStyle('follow');previewFollowPending=F.id===null;};$('circleTarget').onclick=()=>F.setFlightStyle('circle');
 try{const saved=JSON.parse(localStorage.getItem('garuda-flight-settings'));if(saved)F.configure(saved);}catch(e){}
 function syncSettings(){for(const name of ['gap','radius','speed']){$(name+'Setting').value=F.settings[name];$(name+'Value').textContent=F.settings[name].toFixed(name==='speed'?2:1)+(name==='speed'?' m/s':' m');}}
 syncSettings();
@@ -39,15 +39,16 @@ F.onPeople=people=>{try{people.length?localStorage.setItem('garuda-face-people',
 $('faceEnroll').onclick=()=>{const name=Garuda.cleanName(prompt('Name for this face (kept in this browser only):',F.nameOf(F.id)||''));if(!name)return;F.enroll(name);};
 $('faceForget').onclick=()=>{F.setFaceMode(F.faceEnabled);F.forgetPeople();};
 function updateControls(o,now=performance.now()){
+  if(O||V||F.id!==null||F.paused||F.airState==='LANDING')previewFollowPending=false;
   if(O){ // camera on the vehicle: nothing on this page flies anything
     $('airState').textContent='CAMERA ON VEHICLE · command is shown, not sent';
     for(const id of ['takeoff','land','followTarget','circleTarget']){$(id).disabled=true;$(id).className='';}
   }else if(V){ // linked: the buttons describe and command the PX4 lab's vehicle, nothing else
-    $('airState').textContent=V.contact?'PX4 LAB · '+V.mode+' · '+(V.altitude===null?'—':V.altitude.toFixed(1)+' m')+' · SIMULATED':'PX4 LAB · NO CONTACT';
+    $('airState').textContent=V.contact?'PX4 on laptop · '+V.mode+' · '+(V.altitude===null?'—':V.altitude.toFixed(1)+' m')+' · SIMULATED':'PX4 on laptop · no contact';
     $('takeoff').disabled=!V.can.takeoff;$('land').disabled=!V.can.land;$('followTarget').disabled=!V.can.follow;$('circleTarget').disabled=!V.can.circle;
     $('circleTarget').className=V.mode==='CIRCLE'?'selected':'';$('followTarget').className=V.mode==='FOLLOW'?'selected':'';
   }else{
-  $('airState').textContent=F.airState+' · '+F.altitude.toFixed(1)+' m simulated altitude';
+  $('airState').textContent='Page simulation · '+F.airState+' · '+F.altitude.toFixed(1)+' m'+(previewFollowPending?' · Follow selected. Choose a person to begin.':'');
   $('takeoff').disabled=F.airState!=='GROUNDED';$('land').disabled=['GROUNDED','LANDING'].includes(F.airState);
   $('circleTarget').disabled=F.id===null;$('followTarget').disabled=false;
   $('circleTarget').className=F.flightStyle==='circle'?'selected':'';$('followTarget').className=F.flightStyle==='follow'?'selected':'';}

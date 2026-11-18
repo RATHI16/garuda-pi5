@@ -303,7 +303,9 @@ class Trial:
             self.grant(); self.fault=fault; self.fault_at=time.monotonic()
             self.log('fault_injected',fault=fault,at=self.fault_at)
             self.period(fault, LIMITS['zero_deadline_s'])
-            self.held(fault+'_zero', .3)
+            # The simulator permits a brief pause. Keep this loss present past its
+            # five-second deadline before testing that recovery needs new permission.
+            self.held(fault+'_zero', 5.5)
             latency=zero_latency(self.wire.setpoints,self.fault_at,LIMITS['zero_deadline_s'])
             self.log('fault_score',fault=fault,zero_latency_s=latency)
             self.fault=None; self.held(fault+'_no_resume')
@@ -320,6 +322,8 @@ class Trial:
         self.height_context='normal commanded flight'
         self.grant(); self.wire.command(m.MAV_CMD_DO_SET_MODE, 1, 4, 3)  # AUTO/LOITER; no RC required
         self.wait('mode_exit', lambda:self.last.get('fc') is not None and not self.last['fc']['offboard'], 3)
+        self.silent('mode_exit_no_stream')
+        self.open_session()
         self.wire.command(m.MAV_CMD_DO_SET_MODE, 1, 6)
         self.wait('mode_return', lambda:self.last.get('fc') is not None and self.last['fc']['offboard'], 3)
         self.held('mode_no_resume')

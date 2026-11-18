@@ -45,12 +45,17 @@ class PairDepthStore:
         depth). step must be one of CLOUD_STEPS."""
         if step not in self.CLOUD_STEPS:
             raise ValueError(f"step must be one of {self.CLOUD_STEPS}")
+        rgb = self.rgb(key)
+        return None if rgb is None else rgb[::step, ::step]
+
+    def rgb(self, key):
+        """The exact pair’s full colour raster, backed by its retained bytes."""
         t = self._thumbs.get(key)
         if t is None:
             return None
         import numpy as np
         data, h, w = t
-        return np.frombuffer(data, dtype=np.uint8).reshape(h, w, 3)[::step, ::step]
+        return np.frombuffer(data, dtype=np.uint8).reshape(h, w, 3)
 
     def get(self, key):
         return self._items.get(key)
