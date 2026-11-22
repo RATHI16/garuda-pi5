@@ -66,13 +66,28 @@ the h10 apt packages with these files. 5.4.0 files do not run 5.3.0 models.
    git clone -b booth-working https://github.com/RATHI16/garuda-pi5.git ~/garuda-sdk-deploy
    mkdir -p ~/garuda-sdk-deploy/models
    ```
-2. Copy the model files into `~/garuda-sdk-deploy/models/` (from a working Pi or your own Hailo-10H / 5.3.0 builds):
+2. Download the models (public Hailo Model Zoo files; URLs and SHA-256 are in Bhanu's `release/dependencies.json`):
+   ```bash
+   cd ~/garuda-sdk-deploy/models
+   Z=https://hailo-model-zoo.s3.eu-west-2.amazonaws.com/ModelZoo/Compiled
+   curl -fSL -o yolo26m.hef          $Z/v5.3.0/hailo10h/yolo26m.hef          # REQUIRED (detector)
+   curl -fSL -o yolov8m_pose_h10.hef $Z/v5.4.0/hailo10h/yolov8m_pose.hef      # optional: pose / gestures
+   sha256sum yolo26m.hef yolov8m_pose_h10.hef
+   grep -A1 '"path": "models/yolo26m.hef"\|"path": "models/yolov8m_pose_h10.hef"' ../release/dependencies.json | grep sha256
+   cd ~/garuda-sdk-deploy
+   bash models/fetch_osnet_h10.sh      # optional: re-ID (v5.3.0, checksum checked)
+   python3 models/fetch_faces.py       # optional: face matching
+   ```
+   The two `sha256sum` values must equal the two `sha256` lines from `dependencies.json`.
+   (Alternative: Bhanu's installer `python3 release/setup.py install pi --apply --fetch-pi-models --faces` downloads the
+   same files, plus depth models the booth does not need.) Licences: YOLO26 / YOLOv8-pose AGPL-3.0, bench evaluation
+   only; do not re-publish the files.
    | File | Needed |
    |---|---|
    | `yolo26m.hef` | **required** |
    | `yolov8m_pose_h10.hef` | only for pose / gestures |
    | `osnet_x1_0.hef` | only if you turn re-ID on |
-   | `faces/yunet.onnx`, `faces/sface.onnx` | only for face matching: `cd ~/garuda-sdk-deploy && python3 models/fetch_faces.py` |
+   | `faces/yunet.onnx`, `faces/sface.onnx` | only for face matching |
 3. `[Pi]` `pip3 install --break-system-packages pymavlink` (needed for the FC bridge)
 4. Check: `hailortcli run2 set-net ~/garuda-sdk-deploy/models/yolo26m.hef` runs without error (Ctrl+C to stop).
 

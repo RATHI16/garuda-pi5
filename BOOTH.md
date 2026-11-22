@@ -27,7 +27,8 @@ Bhanu's own `fc_bridge.py` stays receive-only. Licence: BSD 3-Clause (see `LICEN
 | `pymavlink`, `tmux` | Pi system | `pip install pymavlink` (or the offline wheel), `sudo apt install tmux` |
 
 Model binaries are deliberately not committed (see Bhanu's `.gitignore` / `models/LICENCES.md`; YOLO26 is not
-product-cleared, OSNet is evaluation-only). Copy them from a working Pi or obtain them yourself.
+product-cleared, OSNet is evaluation-only). They are public Hailo Model Zoo downloads: exact commands and checksums in
+[`booth/SETUP_NEW_PI.md`](booth/SETUP_NEW_PI.md) part C (URLs + SHA-256 from `release/dependencies.json`).
 
 ## Install on a Pi (user `garuda`, Raspberry Pi OS, HailoRT 5.3.0 already working)
 ```bash
