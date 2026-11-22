@@ -13,6 +13,8 @@ This branch = Bhanu's [`garuda-pi5`](https://github.com/bhanuprakashjh/garuda-pi
 
 Bhanu's own `fc_bridge.py` stays receive-only. Licence: BSD 3-Clause (see `LICENSE`), copyright the Garuda SDK project.
 
+**New setup from zero: follow [`booth/SETUP_NEW_PI.md`](booth/SETUP_NEW_PI.md)** (Pi OS, HailoRT 5.3.0, camera, booth setup, FC parameters, laptop, preflight).
+
 ## What is NOT in git (needed on the Pi)
 | Item | Where it goes | Notes |
 |---|---|---|

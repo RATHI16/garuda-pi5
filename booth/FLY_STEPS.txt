@@ -17,7 +17,7 @@ A2 [Pi]  bash ~/booth/booth_setup_once.sh
 A3 FC (the 2 MAVLink lines at every boot, optional but recommended):
        FC power OFF -> take out the FC microSD card -> put it in the laptop.
        On the card make a folder  etc  (if it is not there) and copy into it:
-           C:\Users\I73780\Downloads\fc_sdcard\etc\extras.txt
+           booth\fc_sdcard\etc\extras.txt   (from this repo)
        (the card must then have  X:\etc\extras.txt ). Eject safely, card back in the FC.
        Power on, [QGC] mavlink status -> instance "UDP (14540, remote port: 14540)" mode Onboard.
        If it is not there: the FC did not run the file -> use the 2 lines by hand (B3).
@@ -28,6 +28,10 @@ A4 Test: power everything OFF, then ON, wait 2 min, do PART B. Nothing typed by 
 PART B - EVERY TIME
 =====================================================================
 B1 Props OFF. Drone battery in (FC + Pi powered). Wait 2 min.
+B1a PREFLIGHT (every flight): drone on the floor, not moved since power-on.
+       [QGC] listener estimator_aid_src_rng_hgt   ->  must show  fused: True
+       False -> reboot the FC, keep it still 30 s, check again. Do NOT fly OFFBOARD without it
+       (height then comes from the barometer and wanders 0.5 m+). After any calibration: reboot the FC.
 B2 Laptop: VPN OFF, WiFi GarudaBench. Browser: http://10.43.0.1:8098/demo  (live picture)
 B3 Only if you did NOT do A3: [QGC]
        mavlink stop -u 14550
