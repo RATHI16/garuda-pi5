@@ -21,6 +21,7 @@ Bhanu's own `fc_bridge.py` stays receive-only. Licence: BSD 3-Clause (see `LICEN
 | `yolov8m_pose_h10.hef` | `~/garuda-sdk-deploy/models/` | optional: only for pose / gesture mode |
 | `osnet_x1_0.hef` | `~/garuda-sdk-deploy/models/` | optional: re-ID (`GARUDA_MONO_REID_HEF`); off in the booth settings |
 | `faces/yunet.onnx`, `faces/sface.onnx` | `~/garuda-sdk-deploy/models/faces/` | optional: face matching; `python3 models/fetch_faces.py` |
+| Arducam AR0234 only: Arducam libcamera + rpicam-apps packages, `config.txt` overlay | Pi system | see [`booth/ARDUCAM_AR0234.md`](booth/ARDUCAM_AR0234.md) (packages from Arducam, not in git) |
 | `pymavlink`, `tmux` | Pi system | `pip install pymavlink` (or the offline wheel), `sudo apt install tmux` |
 
 Model binaries are deliberately not committed (see Bhanu's `.gitignore` / `models/LICENCES.md`; YOLO26 is not
