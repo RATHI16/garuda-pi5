@@ -38,6 +38,10 @@ DA_HEF = "/home/garuda/garuda-sdk-deploy/models/depth_anything_v2_vits.hef"
 Y26D_HEF = "/home/garuda/garuda-sdk-deploy/models/yolo26m-depth_hailo_model/yolo26m-depth.hef"
 DA_IN, DA_OUT = "depth_anything_v2_vits/input_layer1", "depth_anything_v2_vits/conv79"
 CAM_W, CAM_H, CAM_FPS = 1280, 720, 15
+# local tweak (booth): browser picture size/quality; unset = Bhanu's original behaviour
+STREAM_W = int(os.environ.get("GARUDA_MONO_STREAM_W", "0"))
+STREAM_Q = int(os.environ.get("GARUDA_MONO_STREAM_Q", "75"))
+STREAM_NEW_ONLY = os.environ.get("GARUDA_MONO_STREAM_NEW_ONLY") == "1"
 CAM_SRC = os.environ.get("GARUDA_MONO_CAM", "auto")  # auto = CSI, else USB UVC | csi = CM3 only | /dev/videoN = that device only
 SKIP_MONO_DEPTH = os.environ.get("GARUDA_MONO_SKIP_DEPTH", "0") == "1"
 DEPTH_EVERY = int(os.environ.get("GARUDA_MONO_DEPTH_EVERY", "3"))  # DepthAnything every Nth frame; YOLO26 runs every frame
@@ -633,7 +637,10 @@ def loop(det, engines):
         # The two views are independent: a fault drawing one must never freeze the other.
         try:
             if _streams["clean"]:
-                ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 75])
+                view = img
+                if 0 < STREAM_W < img.shape[1]:          # local tweak: smaller picture for the browser only
+                    view = cv2.resize(img, (STREAM_W, int(img.shape[0] * STREAM_W / img.shape[1])), interpolation=cv2.INTER_AREA)
+                ok, jpg = cv2.imencode(".jpg", view, [cv2.IMWRITE_JPEG_QUALITY, STREAM_Q])
                 if ok:
                     _jpg["clean"] = jpg.tobytes()
         except Exception as e:
@@ -876,11 +883,13 @@ def make_handler():
                     _viewers["n"] += 1
                     _streams[kind] += 1
                 try:
+                    last_b = None
                     while True:
                         b = _jpg.get("clean" if kind == "clean" else "buf")
-                        if b:
+                        if b and not (STREAM_NEW_ONLY and b is last_b):   # local tweak: skip repeats
                             self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " +
                                              str(len(b)).encode() + b"\r\n\r\n" + b + b"\r\n")
+                            last_b = b
                         time.sleep(0.04)
                 except (BrokenPipeError, ConnectionResetError):
                     pass

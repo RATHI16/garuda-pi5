@@ -1,0 +1,79 @@
+GARUDA BOOTH DRONE - AUTOMATED START (AR0234 camera, yaw-only follow)
+=====================================================================
+[Win] = Windows PowerShell   [Pi] = ssh garuda@10.43.0.1   [QGC] = QGC MAVLink console
+Laptop: VPN OFF, WiFi = GarudaBench (your hotspot password)
+
+=====================================================================
+PART A - ONE TIME ONLY (about 10 min)
+=====================================================================
+A1 [Win] copy the booth folder to the Pi:
+       scp -r $HOME\Downloads\garuda_ubuntu\booth garuda@10.43.0.1:~
+A2 [Pi]  bash ~/booth/booth_setup_once.sh
+       (asks the Pi password for sudo)
+       OK = "RESULT: SETUP DONE"
+       It does: camera service starts at every boot + restarts itself,
+                GarudaBench hotspot at every boot, Ethernet eth-link at every boot,
+                copies the new bridge (keeps detection running without the browser).
+A3 FC (the 2 MAVLink lines at every boot, optional but recommended):
+       FC power OFF -> take out the FC microSD card -> put it in the laptop.
+       On the card make a folder  etc  (if it is not there) and copy into it:
+           C:\Users\I73780\Downloads\fc_sdcard\etc\extras.txt
+       (the card must then have  X:\etc\extras.txt ). Eject safely, card back in the FC.
+       Power on, [QGC] mavlink status -> instance "UDP (14540, remote port: 14540)" mode Onboard.
+       If it is not there: the FC did not run the file -> use the 2 lines by hand (B3).
+A4 Test: power everything OFF, then ON, wait 2 min, do PART B. Nothing typed by hand
+   except the one command in B4.
+
+=====================================================================
+PART B - EVERY TIME
+=====================================================================
+B1 Props OFF. Drone battery in (FC + Pi powered). Wait 2 min.
+B2 Laptop: VPN OFF, WiFi GarudaBench. Browser: http://10.43.0.1:8098/demo  (live picture)
+B3 Only if you did NOT do A3: [QGC]
+       mavlink stop -u 14550
+       mavlink start -u 14540 -o 14540 -t 192.168.100.12 -m onboard -r 20000
+B4 [Win] ssh garuda@10.43.0.1     then  [Pi]  bash ~/booth/booth_fly.sh dry
+       It checks power/heat, camera, FC ping, FC data + finds the FC system ID itself,
+       then shows the bridge window.
+       OK = "[PRESTREAM] ..." lines.  Any FAIL line tells you what to fix.
+B5 Browser: click the person -> SELECTED / CONFIRMED.
+       Bridge line loses "(camera: ...)" while the person is in view.
+B6 RC -> OFFBOARD (disarmed): "[TRACK]". RC -> Position: "[PRESTREAM]". Ctrl+C.
+B7 [Pi]  bash ~/booth/booth_fly.sh          (LIVE, +/-30 deg, 0.2 rad/s)
+       Ground check props OFF (BENCH_STEPS steps 3-4): step right -> target goes +,
+       left -> target goes -, hide 3 s -> RETURN (target back to 0). Armed props off: motor sound changes.
+B8 Flight (owner OK, tether/net, pilot hand on mode switch + kill switch):
+       take off in Position 1-1.5 m, steady -> RC OFFBOARD -> person walks slowly sideways
+       -> drone only yaws (max +/-30 deg), returns to centre when the person leaves.
+       Exit: RC -> Position, land. ABORT (Position / kill) on drift, height change,
+       oscillation, wrong-way yaw, WAIT_FC.
+B9 After: [Pi] bash ~/booth/booth_fly.sh stop
+       [Win] scp -r garuda@10.43.0.1:booth_yaw_logs $HOME\Desktop\
+       QGC: Analyze -> Log Download.
+
+=====================================================================
+STALE / LATENCY - WHAT CAUSES IT AND THE FIX
+=====================================================================
+1. PROVEN (Bhanu's code, garuda_mono.py line 391): detection runs ONLY while a viewer is
+   connected. Laptop tab minimised / laptop asleep / WiFi weak = detection stops = stale.
+   FIX: the new booth_yaw_bridge.py keeps its own viewer open on the Pi. Installed by A2.
+2. The command is refused when the frame is older than 400 ms (onboard_command.py).
+   Things that make frames late:
+     - Face-confirmed return / face matching ON (CPU)  -> keep it OFF
+     - Pose / gestures mode ON                          -> keep it OFF (detection mode)
+     - more than ONE browser tab on /demo               -> one tab only
+     - Pi hot or under-voltage                          -> booth_fly.sh prints throttled=;
+       must be 0x0. Fan/heatsink; a 5 V 5 A supply from the drone battery.
+3. Weak WiFi only affects the PICTURE on the laptop now, not the tracking.
+
+=====================================================================
+USEFUL
+=====================================================================
+Camera log:          [Pi] tail -40 ~/mono.log
+Restart camera:      [Pi] sudo systemctl restart garuda-mono
+Camera status:       [Pi] systemctl status garuda-mono --no-pager
+Re-ID error in log:  [Pi] nano ~/booth/garuda-mono.env  -> delete the REID line -> restart camera
+Do NOT start garuda_mono.py by hand any more (two copies fight for the camera).
+Run it by hand once:  sudo systemctl stop garuda-mono   (then your old tmux command)
+Undo autostart:       sudo systemctl disable --now garuda-mono
+FC undo:              delete etc\extras.txt from the FC SD card.

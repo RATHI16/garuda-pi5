@@ -1,0 +1,81 @@
+BOOTH YAW BRIDGE - BENCH VALIDATION (props OFF, airframe tied down)
+=====================================================================
+What it does: yaw-only follow. Position locked at the point where OFFBOARD was entered,
+yaw limited to +/-45 deg (default) around that heading, returns to centre when the person is
+lost (2 s) or held beyond the limit (1.5 s). Never arms / changes mode / writes params.
+
+[Win] = Windows PowerShell (laptop on GarudaBench WiFi, VPN OFF)
+[Pi]  = ssh garuda@10.43.0.1      [FC] = QGC MAVLink console (telemetry radio)
+
+--- 0. BEFORE YOU START ---------------------------------------------------------
+FC  : 3110 hex, Ethernet to Pi. Only ONE Ethernet MAVLink instance (firmware limit):
+        mavlink stop -u 14550
+        mavlink start -u 14540 -o 14540 -t 192.168.100.12 -m onboard -r 20000
+      (or the SD-card extras.txt). Check: mavlink status -> UDP 14540 Onboard, txerr 0.
+FC params (QGC), write them down before changing:
+      COM_RC_OVERRIDE = 3     (sticks take over from OFFBOARD)
+      COM_OF_LOSS_T   = 1.0
+      COM_OBL_RC_ACT  = 0 (Position)   or 5 (Hold)
+      RC: mode switch has Position + Offboard; kill switch works.
+Pi  : garuda-mono running (systemd or tmux). On the page http://10.43.0.1:8098/demo
+      set Placement = "On drone". Nothing else may use UDP 14540 or send offboard:
+        pkill -f fc_bridge.py; pkill -f mav_eth_test.py; pkill -f offboard_
+      Check the FC link:  ping -c 3 192.168.100.3
+
+--- 1. COPY THE BRIDGE TO THE PI ------------------------------------------------
+[Win] cd $HOME\Downloads\garuda_ubuntu\booth
+      scp booth_yaw_bridge.py test_booth_yaw.py garuda@10.43.0.1:~/garuda-sdk-deploy/services/garuda-follow/
+
+--- 2. DRY RUN (sends NOTHING) -------------------------------------------------
+[Pi]  cd ~/garuda-sdk-deploy/services/garuda-follow
+      GARUDA_FC_BRIDGE=1 python3 booth_yaw_bridge.py --real-flight-controller --dry-run \
+        --listen 0.0.0.0:14540 --fc-host 192.168.100.3 --fc-sysid 2
+OK  : status lines every 0.5 s:  [PRESTREAM] offboard=False armed=False ... sent=0
+      Select yourself on the page -> "(camera: ...)" disappears when the command is valid.
+      Not selected / placement Fixed -> "(camera: Select vehicle mount ...)" etc. = correct.
+      [WAIT_FC] = no FC telemetry -> check step 0 (mavlink status, ping).
+Ctrl+C.
+
+--- 3. LOGIC TEST, DISARMED, ROTATE THE DRONE BY HAND ---------------------------
+Same command WITHOUT --dry-run. Motors stay off (disarmed), so you turn the airframe by hand
+on the table and watch the bridge react to the real FC heading.
+      a) RC: switch to OFFBOARD (disarmed).  ->  [TRACK], yaw_rel=+0.0 (home locked here)
+         (if PX4 refuses OFFBOARD: check the bridge says "sent=" increasing)
+      b) Step right / left in the picture   ->  target + / -   (turn right = +)
+      c) Rotate the drone by hand to about +45 deg while you stay to its right
+                                           ->  "at yaw limit: holding", target stays at the limit
+         keep it there 2 s                 ->  [RETURN] target moves back toward 0
+         rotate it back by hand to ~0      ->  [CENTRED]
+      d) Step far right (off-centre)       ->  CENTRED stays, "waiting (no chase)"
+         step to the centre                ->  [TRACK] again
+      e) Rotate to ~20 deg, hide from the camera 3 s -> "person lost: returning", [RETURN]
+      f) RC: switch to Position            ->  [PRESTREAM] (home cleared)
+Write PASS/FAIL for a..f.
+
+--- 4. ARMED, PROPS OFF, TIED DOWN ----------------------------------------------
+Keep hands away from the motors. Same command (no --dry-run).
+      a) RC: arm in Position, then switch to OFFBOARD  ->  motors idle, [TRACK]
+      b) Step right/left                ->  motor sound changes (yaw torque)
+      c) Hide 3 s                       ->  target holds, then RETURN/CENTRED messages
+      d) Move a stick                   ->  PX4 switches to Position (COM_RC_OVERRIDE=3)
+      e) Back to OFFBOARD, then Ctrl+C the bridge -> after ~1 s PX4 leaves OFFBOARD (failsafe)
+      f) RC mode switch to Position     ->  immediate
+      g) Kill switch                    ->  motors stop
+      Disarm.
+
+--- 5. EVIDENCE -----------------------------------------------------------------
+[Win] scp -r garuda@10.43.0.1:booth_yaw_logs $HOME\Desktop\
+      (one CSV per run: state, offboard, armed, yaw_rel_deg, Pi yaw rate, sent yaw rate, home x/y/z, reason)
+      Also download the PX4 log of the run from QGC (Analyze > Log Download).
+
+--- 6. OPTIONAL: OFFLINE TESTS ON THE PI ----------------------------------------
+[Pi]  cd ~/garuda-sdk-deploy/services/garuda-follow && python3 -m pytest -q test_booth_yaw.py
+      (needs pytest; if missing, skip - they passed on the PC: 14 passed)
+
+--- SETTINGS (command-line, defaults) --------------------------------------------
+--yaw-limit-deg 45   --max-yaw-rate 0.3 rad/s   --return-rate 0.25 rad/s
+--lost-s 2.0   --beyond-s 1.5   --center-tol-deg 3   --resume-rate 0.25
+Start slower for the first armed tests:  --max-yaw-rate 0.2 --return-rate 0.15
+
+--- NOT YET (needs Bhanu / owner approval) --------------------------------------
+Props-on flight. First a tethered or netted hover, flow sensor on a textured floor, pilot on RC.

@@ -1,0 +1,2 @@
+mavlink stop -u 14550
+mavlink start -u 14540 -o 14540 -t 192.168.100.12 -m onboard -r 20000
