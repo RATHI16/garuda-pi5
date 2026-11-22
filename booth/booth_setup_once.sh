@@ -55,12 +55,18 @@ fi
 sudo nmcli con modify "$AP" connection.autoconnect yes connection.autoconnect-priority 100 && ok "hotspot '$AP' starts at boot (priority 100)"
 
 echo "== 5. Ethernet to the FC at every boot"
-if nmcli -t -f NAME con show | grep -qx "eth-link"; then
-  sudo nmcli con modify eth-link connection.autoconnect yes && ok "eth-link (192.168.100.12) starts at boot"
-else
-  echo "  WARN no 'eth-link' profile. Ethernet profiles found:"; nmcli -t -f NAME,TYPE con show | grep ethernet
+if ! nmcli -t -f NAME con show | grep -qx "eth-link"; then
+  # static Pi address on the FC Ethernet link; no gateway/DNS so it never takes over internet routing
+  sudo nmcli con add type ethernet ifname eth0 con-name eth-link ipv4.method manual        ipv4.addresses 192.168.100.12/24 ipv4.never-default yes ipv6.method link-local        && ok "created eth-link (Pi 192.168.100.12/24 for the FC)" || fail "could not create eth-link"
 fi
+sudo nmcli con modify eth-link connection.autoconnect yes connection.autoconnect-priority 50 && ok "eth-link (192.168.100.12) starts at boot"
+sudo nmcli con up eth-link >/dev/null 2>&1 || echo "  WARN eth-link not up now (FC cable in? FC powered?)"
 ip -4 addr show eth0 | grep -q "192.168.100.12" && ok "eth0 has 192.168.100.12 now" || echo "  WARN eth0 has no 192.168.100.12 right now"
+
+echo "== 6. Tools"
+python3 -c "import pymavlink" 2>/dev/null && ok "pymavlink installed" || echo "  WARN pymavlink missing: pip install --break-system-packages pymavlink (or the offline wheel)"
+command -v tmux >/dev/null && ok "tmux installed" || echo "  WARN tmux missing: sudo apt install tmux"
+nmcli -g 802-11-wireless.band con show "$AP" 2>/dev/null | grep -qx a && ok "hotspot on 5 GHz"   || echo "  INFO hotspot on 2.4 GHz. For a smooth /demo page run once: bash ~/booth/hotspot_5ghz.sh"
 
 echo
 echo "RESULT: SETUP DONE. From now on: power on -> wait 2 min -> laptop on GarudaBench -> bash ~/booth/booth_fly.sh"

@@ -35,6 +35,9 @@ cp -r ~/garuda-sdk-deploy/booth ~/booth
 bash ~/booth/booth_setup_once.sh          # camera service, hotspot + Ethernet at boot, bridge copy
 ```
 If no WiFi hotspot exists yet: `GARUDA_AP_PSK=<your-password> bash ~/booth/booth_setup_once.sh`.
+The setup also creates the FC Ethernet profile `eth-link` (Pi `192.168.100.12/24`) if missing.
+For a lag-free `/demo` page move the hotspot to 5 GHz once: `bash ~/booth/hotspot_5ghz.sh` (auto-reverts to
+2.4 GHz after 5 min if the laptop does not reconnect; set `COUNTRY` in the script).
 Camera page: `http://<pi>:8098/demo`. Then follow `booth/FLY_STEPS.txt` (dry run, props-off checks, tethered flight).
 
 ## Adapt to your setup
